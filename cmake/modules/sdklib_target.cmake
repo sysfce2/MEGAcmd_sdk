@@ -98,6 +98,7 @@ set(SDKLIB_HEADERS
     include/mega/overloaded.h
     include/mega/banner.h
     include/mega/auto_file_handle.h
+    include/mega/sc_streaming_parser.h
 
     # megaapi_impl related headers
     include/impl/share.h
@@ -176,6 +177,7 @@ set(SDKLIB_SOURCES
     src/user_attribute_manager.cpp
     src/megautils.cpp
     src/log_level.cpp
+    src/sc_streaming_parser.cpp
 
     # megaapi_impl related sources
     src/impl/share.cpp

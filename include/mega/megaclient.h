@@ -38,6 +38,7 @@
 #include "pubkeyaction.h"
 #include "pwm_file_parser.h"
 #include "request.h"
+#include "sc_streaming_parser.h"
 #include "setandelement.h"
 #include "sharenodekeys.h"
 #include "sync.h"
@@ -1775,6 +1776,7 @@ private:
     std::unique_ptr<HttpReq> pendingsc;
     std::unique_ptr<HttpReq> pendingscUserAlerts;
     BackoffTimer btsc;
+    ScStreamingParser scStreamingParser;
 
     int mPendingCatchUps = 0;
     bool mReceivingCatchUp = false;
@@ -2579,6 +2581,8 @@ public:
     // Process actual data from the server-client channel
     void processScMessageNonStreaming();
     bool procsc(JSON& json);
+
+    void initScStreamingParser();
 
     size_t procreqstat();
 
