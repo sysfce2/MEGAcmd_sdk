@@ -5,34 +5,33 @@
 namespace mega
 {
 
-using FiltersType = std::map<std::string, JSONSplitter::FilterCallback>;
+class MegaClient;
 
+// Class to process server-client packets in streaming using JSONSplitter.
 class MEGA_API ScStreamingParser
 {
 private:
-    JSONSplitter jsonSplitter;
-    FiltersType filters;
-    bool last;
+    MegaClient* mClient;
+    JSONSplitter mJsonSplitter;
+    std::map<std::string, JSONSplitter::FilterCallback> mFilters;
+    bool mLast;
 
-public:
     // For one action packet
-    nameid actionName;
-    bool isSelfOriginating;
-    string seqTag;
+    nameid mActionName;
+    bool mIsSelfOriginating;
+    string mSeqTag;
 
     // For inter action packets
-    std::unique_lock<recursive_mutex> nodeTreeIsChanging;
-    bool originalAC;
-    std::unique_ptr<CodeCounter::ScopeTimer> ccst;
-    std::shared_ptr<Node> lastAPDeletedNode;
+    std::unique_lock<recursive_mutex> mNodeTreeIsChanging;
+    bool mOriginalAC;
+    std::unique_ptr<CodeCounter::ScopeTimer> mCcst;
+    std::shared_ptr<Node> mLastAPDeletedNode;
 
-    ScStreamingParser();
+public:
+    ScStreamingParser(MegaClient* client);
 
-    std::pair<FiltersType::iterator, bool> addFilter(std::string&& key,
-                                                     JSONSplitter::FilterCallback&& filter);
-    void removeFilter(std::string key);
+    void init();
     m_off_t process(const char* data);
-
     bool isInProgress();
     bool isFinished();
     bool isPaused();
