@@ -131,8 +131,6 @@ void ScStreamingParser::init()
     mFilters.emplace("{[a",
                      [this](JSON* json)
                      {
-                         clearActionPacketData();
-
                          // No more Actions Packets. Force it to advance and process all
                          // the remaining command responses until a new "st" is found, if
                          // any. It will also process the latest command response
@@ -147,6 +145,8 @@ void ScStreamingParser::init()
                          // effect.
                          json->enterarray();
 
+                         clearActionPacketData();
+
                          return JSONSplitter::ResultFromBool(json->leavearray());
                      });
 
@@ -155,6 +155,7 @@ void ScStreamingParser::init()
                      [&, this](JSON*)
                      {
                          mClient->sc_procEoo(mNodeTreeIsChanging, mOriginalAC);
+                         mCcst->complete();
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
 }
