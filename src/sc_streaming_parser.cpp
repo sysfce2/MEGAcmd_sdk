@@ -156,7 +156,7 @@ void ScStreamingParser::init()
     mFilters.emplace(">",
                      [this](JSON*)
                      {
-                         mCcst->complete();
+                         mCcst.reset();
 
                          if (mNodeTreeIsChanging.owns_lock())
                          {
