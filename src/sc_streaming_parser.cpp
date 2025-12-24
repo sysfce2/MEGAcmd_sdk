@@ -5,7 +5,7 @@
 namespace mega
 {
 
-ScStreamingParser::ScStreamingParser(MegaClient* client):
+ScStreamingParser::ScStreamingParser(MegaClient& client):
     mClient(client)
 {
     clear();
@@ -17,12 +17,12 @@ void ScStreamingParser::init()
     mFilters.emplace("",
                      [this](JSON*)
                      {
-                         mOriginalAC = mClient->actionpacketsCurrent;
-                         mClient->actionpacketsCurrent = false;
+                         mOriginalAC = mClient.actionpacketsCurrent;
+                         mClient.actionpacketsCurrent = false;
 
                          // Start timer
                          mCcst = std::make_unique<CodeCounter::ScopeTimer>(
-                             mClient->performanceStats.scProcessingTime);
+                             mClient.performanceStats.scProcessingTime);
 
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
@@ -33,43 +33,11 @@ void ScStreamingParser::init()
                      {
                          assert(!mNodeTreeIsChanging.owns_lock());
                          mNodeTreeIsChanging =
-                             std::unique_lock<recursive_mutex>(mClient->nodeTreeMutex);
+                             std::unique_lock<recursive_mutex>(mClient.nodeTreeMutex);
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
 
-    // Parsing of chunk finished
-    mFilters.emplace(">",
-                     [this](JSON*)
-                     {
-                         if (mNodeTreeIsChanging.owns_lock())
-                         {
-                             mNodeTreeIsChanging.unlock();
-                         }
-                         return JSONSplitter::CallbackResult::SUCCESS;
-                     });
-
-    mFilters.emplace("{\"w",
-                     [this](JSON* json)
-                     {
-                         return JSONSplitter::ResultFromBool(
-                             json->storeobject(&mClient->scnotifyurl));
-                     });
-
-    mFilters.emplace("{\"ir",
-                     [this](JSON* json)
-                     {
-                         // when spoonfeeding is in action, there may still be more
-                         // actionpackets to be delivered.
-                         mClient->insca_notlast = json->getint() == 1;
-                         return JSONSplitter::CallbackResult::SUCCESS;
-                     });
-
-    mFilters.emplace("{\"sn",
-                     [this](JSON* json)
-                     {
-                         mClient->sc_storeSn(*json);
-                         return JSONSplitter::CallbackResult::SUCCESS;
-                     });
+    // Action packets (one by one)
 
     mFilters.emplace("{[a{\"a",
                      [this](JSON* json)
@@ -84,7 +52,8 @@ void ScStreamingParser::init()
                          string jsonSid;
                          json->storeobject(&jsonSid);
 
-                         mIsSelfOriginating = std::string_view(mClient->sessionid) == jsonSid;
+                         mIsSelfOriginating =
+                             !memcmp(jsonSid.data(), mClient.sessionid, sizeof(mClient.sessionid));
 
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
@@ -94,7 +63,7 @@ void ScStreamingParser::init()
                      {
                          json->storeobject(&mSeqTag);
 
-                         if (!mClient->sc_checkSequenceTag(mSeqTag))
+                         if (!mClient.sc_checkSequenceTag(mSeqTag))
                          {
                              return JSONSplitter::CallbackResult::PAUSED;
                          }
@@ -102,15 +71,16 @@ void ScStreamingParser::init()
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
 
-    // Action packets (one by one)
     mFilters.emplace("{[a{",
                      [this](JSON* json)
                      {
                          // 'st' is not present
                          if (mSeqTag.empty())
                          {
-                             mClient->sc_checkActionPacketWithoutSt(mActionName,
-                                                                    mLastAPDeletedNode.get());
+                             const bool ret =
+                                 mClient.sc_checkActionPacketWithoutSt(mActionName,
+                                                                       mLastAPDeletedNode.get());
+                             assert(ret);
                          }
 
                          if (mActionName == 0)
@@ -119,10 +89,10 @@ void ScStreamingParser::init()
                              return JSONSplitter::CallbackResult::SUCCESS;
                          }
 
-                         mClient->sc_procActionPacketWithoutCommonTags(*json,
-                                                                       mActionName,
-                                                                       mIsSelfOriginating,
-                                                                       mLastAPDeletedNode);
+                         mClient.sc_procActionPacketWithoutCommonTags(*json,
+                                                                      mActionName,
+                                                                      mIsSelfOriginating,
+                                                                      mLastAPDeletedNode);
 
                          return JSONSplitter::ResultFromBool(json->leaveobject());
                      });
@@ -136,7 +106,7 @@ void ScStreamingParser::init()
                          // any. It will also process the latest command response
                          // associated (by the Sequence Tag) with the latest AP processed
                          // here.
-                         mClient->sc_checkSequenceTag(string());
+                         mClient.sc_checkSequenceTag(string());
 
                          // This is intended to consume the '[' character if the array
                          // was empty and an empty array arrives here "[]".
@@ -150,12 +120,46 @@ void ScStreamingParser::init()
                          return JSONSplitter::ResultFromBool(json->leavearray());
                      });
 
-    // Parsing finished
+    mFilters.emplace("{\"w",
+                     [this](JSON* json)
+                     {
+                         return JSONSplitter::ResultFromBool(
+                             json->storeobject(&mClient.scnotifyurl));
+                     });
+
+    mFilters.emplace("{\"ir",
+                     [this](JSON* json)
+                     {
+                         // when spoonfeeding is in action, there may still be more
+                         // actionpackets to be delivered.
+                         mClient.insca_notlast = json->getint() == 1;
+                         return JSONSplitter::CallbackResult::SUCCESS;
+                     });
+
+    mFilters.emplace("{\"sn",
+                     [this](JSON* json)
+                     {
+                         mClient.sc_storeSn(*json);
+                         return JSONSplitter::CallbackResult::SUCCESS;
+                     });
+
+    // Parsing of sc packet finished
     mFilters.emplace("{",
                      [&, this](JSON*)
                      {
-                         mClient->sc_procEoo(mNodeTreeIsChanging, mOriginalAC);
+                         mClient.sc_procEoo(mNodeTreeIsChanging, mOriginalAC);
                          mCcst->complete();
+                         return JSONSplitter::CallbackResult::SUCCESS;
+                     });
+
+    // Parsing of chunk finished
+    mFilters.emplace(">",
+                     [this](JSON*)
+                     {
+                         if (mNodeTreeIsChanging.owns_lock())
+                         {
+                             mNodeTreeIsChanging.unlock();
+                         }
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
 }

@@ -11,7 +11,7 @@ class MegaClient;
 class MEGA_API ScStreamingParser
 {
 private:
-    MegaClient* mClient;
+    MegaClient& mClient;
     JSONSplitter mJsonSplitter;
     std::map<std::string, JSONSplitter::FilterCallback> mFilters;
     bool mLast;
@@ -28,7 +28,7 @@ private:
     std::shared_ptr<Node> mLastAPDeletedNode;
 
 public:
-    ScStreamingParser(MegaClient* client);
+    ScStreamingParser(MegaClient& client);
 
     void init();
     m_off_t process(const char* data);
