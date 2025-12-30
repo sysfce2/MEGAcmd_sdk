@@ -87,7 +87,7 @@ void ScStreamingParser::init()
                          if (mActionName == 0)
                          {
                              mLastAPDeletedNode.reset();
-                             return JSONSplitter::CallbackResult::SUCCESS;
+                             return JSONSplitter::ResultFromBool(json->leaveobject());
                          }
 
                          mClient.sc_procActionPacketWithoutCommonTags(*json,
