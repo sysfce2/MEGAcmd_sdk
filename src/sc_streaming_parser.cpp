@@ -171,7 +171,7 @@ m_off_t ScStreamingParser::process(const char* data)
     return mJsonSplitter.processChunk(&mFilters, data);
 }
 
-bool ScStreamingParser::isInProgress()
+bool ScStreamingParser::hasStarted()
 {
     return !mJsonSplitter.isStarting();
 }

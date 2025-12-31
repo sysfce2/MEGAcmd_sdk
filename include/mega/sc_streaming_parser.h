@@ -32,7 +32,7 @@ public:
 
     void init();
     m_off_t process(const char* data);
-    bool isInProgress();
+    bool hasStarted();
     bool isFinished();
     bool isPaused();
     bool isFailed();

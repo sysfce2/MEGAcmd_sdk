@@ -60,7 +60,7 @@ void testFinishedProcess(std::shared_ptr<ScStreamingParser>& scStreamingParser,
 {
     ASSERT_TRUE(scStreamingParser->process(json.c_str()) > 0);
 
-    ASSERT_TRUE(scStreamingParser->isInProgress());
+    ASSERT_TRUE(scStreamingParser->hasStarted());
     ASSERT_TRUE(scStreamingParser->isFinished());
     ASSERT_FALSE(scStreamingParser->isFailed());
     ASSERT_FALSE(scStreamingParser->isPaused());
@@ -77,7 +77,7 @@ TEST_F(ScStreamingParserTest, InitAndClear)
     // Init
     scStreamingParser->init();
 
-    ASSERT_FALSE(scStreamingParser->isInProgress());
+    ASSERT_FALSE(scStreamingParser->hasStarted());
     ASSERT_FALSE(scStreamingParser->isFinished());
     ASSERT_FALSE(scStreamingParser->isFailed());
     ASSERT_FALSE(scStreamingParser->isPaused());
@@ -85,7 +85,7 @@ TEST_F(ScStreamingParserTest, InitAndClear)
     // Clear
     scStreamingParser->clear();
 
-    ASSERT_FALSE(scStreamingParser->isInProgress());
+    ASSERT_FALSE(scStreamingParser->hasStarted());
     ASSERT_FALSE(scStreamingParser->isFinished());
     ASSERT_FALSE(scStreamingParser->isFailed());
     ASSERT_FALSE(scStreamingParser->isPaused());
@@ -121,7 +121,7 @@ TEST_F(ScStreamingParserTest, Process)
     // Clear for next process
     scStreamingParser->clear();
 
-    ASSERT_FALSE(scStreamingParser->isInProgress());
+    ASSERT_FALSE(scStreamingParser->hasStarted());
     ASSERT_FALSE(scStreamingParser->isFinished());
     ASSERT_FALSE(scStreamingParser->isFailed());
     ASSERT_FALSE(scStreamingParser->isPaused());
@@ -205,7 +205,7 @@ TEST_F(ScStreamingParserTest, ProcessChunks)
     size_t consumed = (size_t)scStreamingParser->process(json.c_str());
 
     ASSERT_TRUE(consumed > 0);
-    ASSERT_TRUE(scStreamingParser->isInProgress());
+    ASSERT_TRUE(scStreamingParser->hasStarted());
     ASSERT_FALSE(scStreamingParser->isFinished());
     ASSERT_FALSE(scStreamingParser->isFailed());
     ASSERT_FALSE(scStreamingParser->isPaused());
@@ -235,7 +235,7 @@ TEST_F(ScStreamingParserTest, ProcessAndPause)
 
     scStreamingParser->init();
 
-    // Simulate the case: command is sent, but response has not bee received
+    // Simulate the case: command is sent, but response has not been received
     client->queueCommand(new CommandSetPendingContact(client.get(), "", (opcactions_t)0));
     bool dummy1;
     string dummy2;
@@ -244,7 +244,7 @@ TEST_F(ScStreamingParserTest, ProcessAndPause)
     size_t consumed = (size_t)scStreamingParser->process(json.c_str());
 
     ASSERT_TRUE(consumed > 0);
-    ASSERT_TRUE(scStreamingParser->isInProgress());
+    ASSERT_TRUE(scStreamingParser->hasStarted());
     ASSERT_FALSE(scStreamingParser->isFinished());
     ASSERT_FALSE(scStreamingParser->isFailed());
     ASSERT_TRUE(scStreamingParser->isPaused());
