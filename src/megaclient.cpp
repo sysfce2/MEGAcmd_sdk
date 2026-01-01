@@ -5537,6 +5537,8 @@ bool MegaClient::sc_procActionPacket(JSON& json, std::shared_ptr<Node>& lastAPDe
         // the "a" attribute is guaranteed to be the first in the object
         if (json.getnameid() == makeNameid("a"))
         {
+            sc_updateStats();
+
             nameid name = json.getnameidvalue();
 
             bool isSelfOriginating = Utils::startswith(json.pos, "\"i\":\"") &&
@@ -5556,17 +5558,20 @@ bool MegaClient::sc_procActionPacket(JSON& json, std::shared_ptr<Node>& lastAPDe
     return false;
 }
 
+void MegaClient::sc_updateStats()
+{
+    if (!statecurrent)
+    {
+        fnstats.actionPackets++;
+    }
+}
+
 void MegaClient::sc_procActionPacketWithoutCommonTags(JSON& json,
                                                       nameid name,
                                                       bool isSelfOriginating,
                                                       std::shared_ptr<Node>& lastAPDeletedNode)
 {
     bool moveOperation = false; // true if "d" packet has "m":1
-
-    if (!statecurrent)
-    {
-        fnstats.actionPackets++;
-    }
 
     // only process server-client request if not marked as
     // self-originating ("i" marker element guaranteed to be following
@@ -10523,14 +10528,10 @@ int MegaClient::readnodes(JSON* j,
         }
     }
 
-    mergenewshares(notify != 0);
-    mNodeManager.checkOrphanNodes(missingParentNodes);
-
 #ifdef ENABLE_SYNC
-    for (NodeHandle p : allParents)
-    {
-        syncs.triggerSync(p);
-    }
+    postReadNodes(notify, missingParentNodes, &allParents);
+#else
+    postReadNodes(notify, missingParentNodes);
 #endif
 
     return j->leavearray();
@@ -10869,6 +10870,25 @@ int MegaClient::readnode(JSON* j,
     }
 
     return 0;
+}
+
+#ifdef ENABLE_SYNC
+void MegaClient::postReadNodes(bool notify,
+                               NodeManager::MissingParentNodes& missingParentNodes,
+                               set<NodeHandle>* allParents)
+#else
+void MegaClient::postReadNodes(bool notify, NodeManager::MissingParentNodes& missingParentNodes)
+#endif
+{
+    mergenewshares(notify != 0);
+    mNodeManager.checkOrphanNodes(missingParentNodes);
+
+#ifdef ENABLE_SYNC
+    for (NodeHandle p: *allParents)
+    {
+        syncs.triggerSync(p);
+    }
+#endif
 }
 
 // decrypt and set encrypted sharekey

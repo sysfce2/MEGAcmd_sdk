@@ -1,6 +1,7 @@
 #pragma once
 
 #include "json.h"
+#include "tree_filters.h"
 
 namespace mega
 {
@@ -27,6 +28,8 @@ private:
     std::unique_ptr<CodeCounter::ScopeTimer> mCcst;
     std::shared_ptr<Node> mLastAPDeletedNode;
 
+    TreeFilters mTreeFilters;
+
 public:
     ScStreamingParser(MegaClient& client);
 
@@ -50,6 +53,8 @@ private:
     // Operate locks
     void acquireLock();
     void releaseLock();
+
+    void checkActionPacket();
 };
 
 }

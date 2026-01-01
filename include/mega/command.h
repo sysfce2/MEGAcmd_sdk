@@ -40,6 +40,7 @@ namespace mega {
 
 struct JSON;
 struct MegaApp;
+class TreeFilters;
 
 // request command component
 
@@ -734,6 +735,7 @@ public:
 
 private:
     friend class MegaClient;
+    friend class TreeFilters;
     vector<NewNode> nn;
     targettype_t type;
     putsource_t source;

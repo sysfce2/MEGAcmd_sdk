@@ -1904,6 +1904,7 @@ public:
     void sc_procEoo(std::unique_lock<recursive_mutex>& nodeTreeIsChanging, bool originalAC);
     // process an action packet
     bool sc_procActionPacket(JSON& json, std::shared_ptr<Node>& lastAPDeletedNode);
+    void sc_updateStats();
     // process an action packet excluding a, i and st tags
     void sc_procActionPacketWithoutCommonTags(JSON& json,
                                               nameid name,
@@ -2560,6 +2561,14 @@ public:
                  NodeManager::MissingParentNodes& missingParentNodes,
                  handle& previousHandleForAlert,
                  set<NodeHandle>* allParents);
+
+#ifdef ENABLE_SYNC
+    void postReadNodes(bool notify,
+                       NodeManager::MissingParentNodes& missingParentNodes,
+                       set<NodeHandle>* allParents);
+#else
+    void postReadNodes(bool notify, NodeManager::MissingParentNodes& missingParentNodes);
+#endif
 
     void readok(JSON*);
     void readokelement(JSON*);

@@ -1,12 +1,14 @@
 #include "mega/sc_streaming_parser.h"
 
 #include "mega/megaclient.h"
+#include "mega/tree_filters.h"
 
 namespace mega
 {
 
 ScStreamingParser::ScStreamingParser(MegaClient& client):
-    mClient(client)
+    mClient(client),
+    mTreeFilters(client)
 {
     clear();
 }
@@ -42,7 +44,19 @@ void ScStreamingParser::init()
     mFilters.emplace("{[a{\"a",
                      [this](JSON* json)
                      {
+                         mClient.sc_updateStats();
+
                          mActionName = json->getnameidvalue();
+
+                         if (mActionName == makeNameid("t"))
+                         {
+                             mTreeFilters.start(mFilters,
+                                                [this]()
+                                                {
+                                                    checkActionPacket();
+                                                });
+                         }
+
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
 
@@ -75,25 +89,24 @@ void ScStreamingParser::init()
     mFilters.emplace("{[a{",
                      [this](JSON* json)
                      {
-                         // 'st' is not present
-                         if (mSeqTag.empty())
-                         {
-                             const bool ret =
-                                 mClient.sc_checkActionPacketWithoutSt(mActionName,
-                                                                       mLastAPDeletedNode.get());
-                             assert(ret);
-                         }
-
                          if (mActionName == 0)
                          {
+                             checkActionPacket();
                              mLastAPDeletedNode.reset();
-                             return JSONSplitter::ResultFromBool(json->leaveobject());
                          }
-
-                         mClient.sc_procActionPacketWithoutCommonTags(*json,
-                                                                      mActionName,
-                                                                      mIsSelfOriginating,
-                                                                      mLastAPDeletedNode);
+                         else if (mTreeFilters.isStarted())
+                         {
+                             mTreeFilters.end(mFilters);
+                             mLastAPDeletedNode.reset();
+                         }
+                         else
+                         {
+                             checkActionPacket();
+                             mClient.sc_procActionPacketWithoutCommonTags(*json,
+                                                                          mActionName,
+                                                                          mIsSelfOriginating,
+                                                                          mLastAPDeletedNode);
+                         }
 
                          clearActionPacketData();
                          return JSONSplitter::ResultFromBool(json->leaveobject());
@@ -198,6 +211,11 @@ void ScStreamingParser::setLastReceived()
 
 void ScStreamingParser::clear()
 {
+    if (mTreeFilters.isStarted())
+    {
+        mTreeFilters.clear(mFilters);
+    }
+
     mJsonSplitter.clear();
     mLast = false;
     mLastAPDeletedNode = nullptr;
@@ -238,6 +256,17 @@ void ScStreamingParser::releaseLock()
     if (mNodeTreeIsChanging.owns_lock())
     {
         mNodeTreeIsChanging.unlock();
+    }
+}
+
+void ScStreamingParser::checkActionPacket()
+{
+    // 'st' is not present
+    if (mSeqTag.empty())
+    {
+        const bool ret =
+            mClient.sc_checkActionPacketWithoutSt(mActionName, mLastAPDeletedNode.get());
+        assert(ret);
     }
 }
 
