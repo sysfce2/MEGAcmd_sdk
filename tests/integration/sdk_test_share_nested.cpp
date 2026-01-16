@@ -299,7 +299,7 @@ TEST_F(SdkTestShareNested, BasicNestedShares)
  * It test if a file uploaded by a sharee is decryptable, creating a nested share and uploading a
  * file in the inshare of the nested sharee, ensuring that all peers can see their respective files.
  */
-TEST_F(SdkTestShareNested, DISABLED_UploadFileInNestedShare)
+TEST_F(SdkTestShareNested, UploadFileInNestedShare)
 {
     const auto logPre = getLogPrefix();
 
