@@ -491,6 +491,9 @@ private:
 
     // true if the credentials of this user require verification
     bool verificationRequired(handle userHandle);
+
+    // Helper to send Pending Keys to the sharees
+    bool sendPendingKey(const handle nodehandle, User* u);
 };
 
 struct DynamicMessageNotification

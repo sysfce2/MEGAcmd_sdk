@@ -23559,6 +23559,41 @@ string KeyManager::getPrivRSA()
     return mPrivRSA;
 }
 
+bool KeyManager::sendPendingKey(const handle nodehandle, User* u)
+{
+    auto shareit = mShareKeys.find(nodehandle);
+    if (shareit != mShareKeys.end())
+    {
+        std::string encryptedKey = encryptShareKeyTo(u->userhandle, shareit->second.first);
+        if (encryptedKey.size())
+        {
+            mClient.queueCommand(
+                new CommandPendingKeys(&mClient,
+                                       u->userhandle,
+                                       nodehandle,
+                                       (byte*)encryptedKey.data(),
+                                       [](Error err)
+                                       {
+                                           if (err)
+                                           {
+                                               LOG_err << "Error sending share key: " << err;
+                                           }
+                                           else
+                                           {
+                                               LOG_debug << "Share key correctly sent";
+                                           }
+                                       }));
+            return true;
+        }
+        else
+        {
+            LOG_warn << "Unable to encrypt share key of the outshare " << toNodeHandle(nodehandle)
+                     << " to uh: " << toHandle(u->userhandle);
+        }
+    }
+    return false;
+}
+
 bool KeyManager::promotePendingShares()
 {
     bool attributeUpdated = false;
@@ -23574,36 +23609,15 @@ bool KeyManager::promotePendingShares()
             if (u && !verificationRequired(u->userhandle))
             {
                 LOG_debug << "Promoting pending outshare of node " << toNodeHandle(nodehandle) << " for " << uid;
-                auto shareit = mShareKeys.find(nodehandle);
-                if (shareit != mShareKeys.end())
+                if (sendPendingKey(nodehandle, u))
                 {
-                    std::string encryptedKey = encryptShareKeyTo(u->userhandle, shareit->second.first);
-                    if (encryptedKey.size())
-                    {
-                        mClient.queueCommand(new CommandPendingKeys(
-                            &mClient,
-                            u->userhandle,
-                            nodehandle,
-                            (byte*)encryptedKey.data(),
-                            [uid](Error err)
-                            {
-                                if (err)
-                                {
-                                    LOG_err << "Error sending share key: " << err;
-                                }
-                                else
-                                {
-                                    LOG_debug << "Share key correctly sent";
-                                }
-                            }));
-
-                        keysToDelete.push_back(uid);
-                        attributeUpdated = true;
-                    }
-                    else
-                    {
-                        LOG_warn << "Unable to encrypt share key to promote pending outshare " << toNodeHandle(nodehandle) << " uh: " << toHandle(u->userhandle);
-                    }
+                    keysToDelete.push_back(uid);
+                    attributeUpdated = true;
+                }
+                else
+                {
+                    LOG_warn << "Unable to promote pending outshare " << toNodeHandle(nodehandle)
+                             << " uh: " << toHandle(u->userhandle);
                 }
             }
         }
