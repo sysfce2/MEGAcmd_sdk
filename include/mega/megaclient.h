@@ -1778,6 +1778,25 @@ private:
     BackoffTimer btsc;
     ScStreamingParser scStreamingParser;
 
+    /*
+     * This is a switch for parsing action aackets from SC channel
+     * if true, use the ScStreamingParser to handle action packets
+     * if false, use original mode, which will call procsc()
+     *
+     * TODO(Carlos & Darren):
+     * Before streaming goes into production, we need following changes:
+     * 1. Implement the switch between two modes
+     * 2. Implement the 'isn' tag for commiting to database as memory changes
+     * 3. Optimize the 't' tag for huge action packet
+     * After these changes, we can enable the streaming parsing by setting this to true
+     * It needs to be changed to false before merging to the develop branch
+     */
+    bool mStreamingEnabled = true;
+
+    // Every time received data from sc channel, set this to true
+    // If some error occurred, set this to false, it will stop current parsing process
+    bool mStreamingContinue = false;
+
     int mPendingCatchUps = 0;
     bool mReceivingCatchUp = false;
 
@@ -2574,15 +2593,68 @@ public:
 
     // Process states and prepare data
     void handleScNonStreaming();
+    void handleScInStreaming();
 
+    void handleScKeepAliveInSuccessState();
     void handleScErrorInSuccessState();
     void handleScInFailureState();
+    void handleScTimeoutInFlightState();
 
     // Process actual data from the server-client channel
     void processScMessageNonStreaming();
     bool procsc(JSON& json);
+    void processScMessageInStreaming();
 
-    void initScStreamingParser();
+    // Check if streaming parsing action packets is enabled
+    inline bool isStreamingEnabled() const
+    {
+        return mStreamingEnabled;
+    }
+
+    // Enable streaming parsing action packets
+    inline void enableStreaming()
+    {
+        mStreamingEnabled = true;
+        if (pendingsc)
+        {
+            pendingsc->mChunked = true;
+        }
+    }
+
+    // Disable streaming parsing action packets
+    inline void disableStreaming()
+    {
+        assert(!scStreamingParser.hasStarted());
+        mStreamingEnabled = false;
+    }
+
+    inline void clearStreamingParser()
+    {
+        scStreamingParser.clear();
+        mStreamingContinue = false;
+    }
+
+    inline void resetScRequest()
+    {
+        pendingsc.reset();
+        btsc.reset();
+    }
+
+    // Abort backoff timer for cs request
+    inline void abortBackoffTimerForCsRequest()
+    {
+        if (reqs.retryReasonIsApi())
+        {
+            btcs.reset();
+        }
+    }
+
+    // Check if sc parsing is in progress
+    inline bool isParsingSc()
+    {
+        return (isStreamingEnabled() && scStreamingParser.hasStarted()) ||
+               (!isStreamingEnabled() && jsonsc.pos);
+    }
 
     size_t procreqstat();
 

@@ -19,6 +19,8 @@ void ScStreamingParser::init()
                      {
                          mOriginalAC = mClient.actionpacketsCurrent;
                          mClient.actionpacketsCurrent = false;
+                         mClient.insca = false;
+                         mClient.insca_notlast = false;
 
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
@@ -27,9 +29,7 @@ void ScStreamingParser::init()
     mFilters.emplace("<",
                      [this](JSON*)
                      {
-                         assert(!mNodeTreeIsChanging.owns_lock());
-                         mNodeTreeIsChanging =
-                             std::unique_lock<recursive_mutex>(mClient.nodeTreeMutex);
+                         acquireLock();
 
                          // Start timer
                          mCcst = std::make_unique<CodeCounter::ScopeTimer>(
@@ -66,6 +66,7 @@ void ScStreamingParser::init()
 
                          if (!mClient.sc_checkSequenceTag(mSeqTag))
                          {
+                             releaseLock();
                              return JSONSplitter::CallbackResult::PAUSED;
                          }
 
@@ -95,6 +96,7 @@ void ScStreamingParser::init()
                                                                       mIsSelfOriginating,
                                                                       mLastAPDeletedNode);
 
+                         clearActionPacketData();
                          return JSONSplitter::ResultFromBool(json->leaveobject());
                      });
 
@@ -115,8 +117,6 @@ void ScStreamingParser::init()
                          // remaining character ']' and this call doesn't have any
                          // effect.
                          json->enterarray();
-
-                         clearActionPacketData();
 
                          return JSONSplitter::ResultFromBool(json->leavearray());
                      });
@@ -149,6 +149,7 @@ void ScStreamingParser::init()
                      [&, this](JSON*)
                      {
                          mClient.sc_procEoo(mNodeTreeIsChanging, mOriginalAC);
+                         releaseLock();
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
 
@@ -157,11 +158,6 @@ void ScStreamingParser::init()
                      [this](JSON*)
                      {
                          mCcst.reset();
-
-                         if (mNodeTreeIsChanging.owns_lock())
-                         {
-                             mNodeTreeIsChanging.unlock();
-                         }
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
 }
@@ -213,6 +209,7 @@ void ScStreamingParser::clear()
     {
         mCcst.reset();
     }
+    releaseLock();
 }
 
 void ScStreamingParser::clearActionPacketData()
@@ -220,6 +217,29 @@ void ScStreamingParser::clearActionPacketData()
     mActionName = 0;
     mIsSelfOriginating = false;
     mSeqTag.clear();
+}
+
+void ScStreamingParser::acquireLock()
+{
+    if (!mNodeTreeIsChanging.owns_lock())
+    {
+        if (mNodeTreeIsChanging.mutex() == &mClient.nodeTreeMutex)
+        {
+            mNodeTreeIsChanging.lock();
+        }
+        else
+        {
+            mNodeTreeIsChanging = std::unique_lock<recursive_mutex>(mClient.nodeTreeMutex);
+        }
+    }
+}
+
+void ScStreamingParser::releaseLock()
+{
+    if (mNodeTreeIsChanging.owns_lock())
+    {
+        mNodeTreeIsChanging.unlock();
+    }
 }
 
 } // namespace

@@ -53,6 +53,7 @@ target_sources(test_integration
     SdkTestGetChildrenLexicographic_test.cpp
     sdk_test_share.cpp
     sdk_test_share_nested.cpp
+    SdkTestMassiveActionPackets_test.cpp
 
     passwordManager/SdkTestPasswordManager.cpp
     passwordManager/SdkTestPasswordManager.h

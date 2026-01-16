@@ -2126,6 +2126,9 @@ MegaClient::MegaClient(MegaApp* a,
     h->setuseragent(&useragent);
     h->setmaxdownloadspeed(0);
     h->setmaxuploadspeed(0);
+
+    // Initialize filters in the streaming parser for action packets
+    scStreamingParser.init();
 }
 
 MegaClient::~MegaClient()
@@ -2133,6 +2136,8 @@ MegaClient::~MegaClient()
     LOG_debug << clientname << "~MegaClient running";
     destructorRunning = true;
     locallogout(false, true);
+
+    clearStreamingParser();
 
     delete pendingcs;
     delete badhostcs;
@@ -3291,6 +3296,10 @@ void MegaClient::exec()
                 }
 
                 pendingsc->type = REQ_JSON;
+                if (isStreamingEnabled())
+                {
+                    pendingsc->mChunked = true;
+                }
                 pendingsc->post(this);
                 app->notify_network_activity(NetworkActivityChannel::SC,
                                              NetworkActivityType::REQUEST_SENT,
@@ -3837,7 +3846,7 @@ int MegaClient::preparewait()
             }
         }
 
-        if (!pendingscTimedOut && !jsonsc.pos && pendingsc && pendingsc->status == REQ_INFLIGHT)
+        if (!pendingscTimedOut && !isParsingSc() && pendingsc && pendingsc->status == REQ_INFLIGHT)
         {
             dstime timeout = pendingsc->lastdata + HttpIO::SCREQUESTTIMEOUT;
             if (timeout > Waiter::ds && timeout < nds)
@@ -4839,11 +4848,12 @@ void MegaClient::disconnect()
 void MegaClient::catchup()
 {
     mPendingCatchUps++;
-    if (pendingsc && !jsonsc.pos)
+    if (pendingsc && !isParsingSc())
     {
         LOG_debug << "Terminating pendingsc connection for catchup.   Pending: " << mPendingCatchUps;
         pendingsc->disconnect();
         pendingsc.reset();
+        clearStreamingParser();
     }
     btsc.reset();
 }
@@ -5562,8 +5572,8 @@ void MegaClient::sc_procActionPacketWithoutCommonTags(JSON& json,
     // self-originating ("i" marker element guaranteed to be following
     // "a" element if present)
     if (fetchingnodes || !isSelfOriginating || name == name_id::d ||
-        name == 't') // we still set 'i' on move commands to produce backward
-                     // compatible actionpackets, so don't skip those here
+        name == makeNameid("t")) // we still set 'i' on move commands to produce backward
+                                 // compatible actionpackets, so don't skip those here
     {
 #ifdef ENABLE_CHAT
         bool readingPublicChat = false;
@@ -16148,6 +16158,7 @@ void MegaClient::resetScForFetchnodes()
 
     // prevent the processing of previous sc requests
     pendingsc.reset();
+    clearStreamingParser();
 
     if (pendingscUserAlerts)
     {
@@ -25024,7 +25035,7 @@ void MegaClient::setMegaURL(const std::string& url)
 
 void MegaClient::handleScChannel()
 {
-    return handleScNonStreaming();
+    return isStreamingEnabled() ? handleScInStreaming() : handleScNonStreaming();
 }
 
 void MegaClient::handleScNonStreaming()
@@ -25042,12 +25053,11 @@ void MegaClient::handleScNonStreaming()
         {
             case REQ_SUCCESS:
                 pendingscTimedOut = false;
+
                 if (pendingsc->contentlength == 1 && pendingsc->in.size() &&
                     pendingsc->in[0] == '0')
                 {
-                    LOG_debug << "SC keep-alive received";
-                    pendingsc.reset();
-                    btsc.reset();
+                    handleScKeepAliveInSuccessState();
                     break;
                 }
 
@@ -25076,13 +25086,7 @@ void MegaClient::handleScNonStreaming()
                 if (!pendingscTimedOut &&
                     Waiter::ds >= (pendingsc->lastdata + HttpIO::SCREQUESTTIMEOUT))
                 {
-                    LOG_debug << clientname << "sc timeout expired at ds: " << Waiter::ds
-                              << " and lastdata ds: " << pendingsc->lastdata;
-                    // In almost all cases the server won't take more than SCREQUESTTIMEOUT seconds.
-                    // But if it does, break the cycle of endless requests for the same thing
-                    pendingscTimedOut = true;
-                    pendingsc.reset();
-                    btsc.reset();
+                    handleScTimeoutInFlightState();
                 }
                 break;
             default:
@@ -25107,11 +25111,23 @@ void MegaClient::processScMessageNonStreaming()
 
             // upon reception of action packets, if the cs request is waiting for a retry
             // and it failed due to -3 or -4 error from API, we can abort the backoff
-            if (reqs.retryReasonIsApi())
-            {
-                btcs.reset();
-            }
+            abortBackoffTimerForCsRequest();
         }
+    }
+    return;
+}
+
+void MegaClient::handleScKeepAliveInSuccessState()
+{
+    LOG_debug << "SC keep-alive received";
+    resetScRequest();
+
+    // In non-streaming mode this is always false
+    if (scStreamingParser.hasStarted())
+    {
+        // Let streaming parser deal with this unexpected keep-alive message between
+        // chunks
+        mStreamingContinue = true;
     }
     return;
 }
@@ -25230,6 +25246,7 @@ void MegaClient::handleScInFailureState()
         }
 
         pendingsc.reset();
+        clearStreamingParser();
     }
 
     if (scsn.stopped())
@@ -25244,6 +25261,126 @@ void MegaClient::handleScInFailureState()
         // failure, repeat with capped exponential backoff
         btsc.backoff();
         LOG_debug << clientname << "sc backing off with delay ds: " << btsc.retryin();
+    }
+    return;
+}
+
+void MegaClient::handleScTimeoutInFlightState()
+{
+    LOG_debug << clientname << "sc timeout expired at ds: " << Waiter::ds
+              << " and lastdata ds: " << pendingsc->lastdata;
+    // In almost all cases the server won't take more than SCREQUESTTIMEOUT seconds.
+    // But if it does, break the cycle of endless requests for the same thing
+    pendingscTimedOut = true;
+    resetScRequest();
+}
+
+void MegaClient::handleScInStreaming()
+{
+    if (!jsonsc.pos && !pendingscUserAlerts && pendingsc)
+    {
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+        if (globalMegaTestHooks.interceptSCRequest)
+        {
+            globalMegaTestHooks.interceptSCRequest(pendingsc);
+        }
+#endif
+
+        switch (static_cast<reqstatus_t>(pendingsc->status))
+        {
+            case REQ_SUCCESS:
+                pendingscTimedOut = false;
+
+                if (pendingsc->contentlength == 1 && pendingsc->in.size() &&
+                    pendingsc->in[0] == '0')
+                {
+                    handleScKeepAliveInSuccessState();
+                    break;
+                }
+
+                if (scStreamingParser.hasStarted() || *pendingsc->in.c_str() == '{')
+                {
+                    // There are two scenarios:
+                    // 1. received one complete JSON message
+                    // 2. recevied the last chunk of the JSON message
+                    mStreamingContinue = true;
+                    scStreamingParser.setLastReceived();
+                    app->notify_network_activity(NetworkActivityChannel::SC,
+                                                 NetworkActivityType::REQUEST_RECEIVED,
+                                                 API_OK);
+                    break;
+                }
+                else
+                {
+                    handleScErrorInSuccessState();
+                }
+
+                [[fallthrough]];
+            case REQ_FAILURE:
+                handleScInFailureState();
+                break;
+
+            case REQ_INFLIGHT:
+                if (!pendingscTimedOut &&
+                    Waiter::ds >= (pendingsc->lastdata + HttpIO::SCREQUESTTIMEOUT))
+                {
+                    handleScTimeoutInFlightState();
+                    clearStreamingParser();
+                }
+                else
+                {
+                    // This indicates there's new chunk of data received
+                    if (pendingsc->bufpos > pendingsc->notifiedbufpos)
+                    {
+                        mStreamingContinue = true;
+                        pendingsc->notifiedbufpos = pendingsc->bufpos;
+                    }
+                }
+
+                break;
+            default:
+                break;
+        }
+    }
+    processScMessageInStreaming();
+    return;
+}
+
+void MegaClient::processScMessageInStreaming()
+{
+    if (mStreamingContinue && !scpaused)
+    {
+        m_off_t consumed = scStreamingParser.process(pendingsc->data());
+        // In case the logic changed
+        assert(consumed >= 0);
+        if (consumed)
+        {
+            pendingsc->purge(static_cast<size_t>(consumed));
+        }
+
+        // Check if we should stop processing, either because:
+        // 1. Data was consumed and parser is not paused
+        // 2. Parser has finished or failed (even if consumed is 0)
+        if (!scStreamingParser.isPaused())
+        {
+            mStreamingContinue = false;
+            if (scStreamingParser.isLastReceived())
+            {
+                if (!scStreamingParser.isFinished() && !scStreamingParser.isFailed())
+                {
+                    // This means we received the last part of whole JSON(action packets)
+                    // But JSONSplitter did not end the process properly
+                    // So, to prevent any data inconsistancy, assert here
+                    assert(false);
+                }
+
+                clearStreamingParser();
+                pendingsc.reset();
+                btsc.reset();
+
+                abortBackoffTimerForCsRequest();
+            }
+        }
     }
     return;
 }
