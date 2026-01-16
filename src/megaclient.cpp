@@ -23600,10 +23600,10 @@ bool KeyManager::promotePendingShares()
     bool newshares = false;
     std::vector<std::string> keysToDelete;
 
-    for (const auto& it : mPendingOutShares)
+    for (const auto& [nodehandle, newShareeUIDList]: mPendingOutShares)
     {
-        handle nodehandle = it.first;
-        for (const auto& uid : it.second)
+        // Send the share key to each sharee
+        for (const auto& uid: newShareeUIDList)
         {
             User *u = mClient.finduser(uid.c_str(), 0);
             if (u && !verificationRequired(u->userhandle))
