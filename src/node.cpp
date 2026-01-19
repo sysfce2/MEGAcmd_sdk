@@ -1275,17 +1275,14 @@ bool Node::applykey()
     bool applied = keyApplied();
     if (!applied)
     {
-        LOG_warn << "Failed to apply key for node: " << Base64Str<MegaClient::NODEHANDLE>(nodehandle);
-        // keys could be missing due to nested inshares with multiple users: user A shares a folder 1
-        // with user B and folder 1 has a subfolder folder 1_1. User A shares folder 1_1 with user C
-        // and user C adds some files, which will be undecryptable for user B.
-        // The ticket SDK-1959 aims to mitigate the problem. Uncomment next line when done:
+        LOG_warn << "Failed to apply key for node: "
+                 << Base64Str<MegaClient::NODEHANDLE>(nodehandle);
         // assert(applied);
-        // This can also happen due to a race condition between the creation / destruction of shares
+        // This can happen due to a race condition between the creation / destruction of shares
         // the retrieval keys using "pk" and the update of the "^!keys" attribute.
-        // If a folder is shared / unshared / shared, it's possible to reach this code with the old share
-        // key, that could be in "mNewKeyRepository" (not in n->sharekey because Node::testShareKey is
-        // used to prevent it).
+        // If a folder is shared / unshared / shared, it's possible to reach this code with the old
+        // share key, that could be in "mNewKeyRepository" (not in n->sharekey because
+        // Node::testShareKey is used to prevent it).
     }
 
     return applied;
