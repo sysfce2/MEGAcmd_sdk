@@ -41,6 +41,7 @@ public:
     void createRemoteFileNode(unsigned apiIndexA,
                               const sdk_test::FileNodeInfo& fileInfo,
                               MegaNode* rootnode,
+                              MegaHandle& newNodeHandleResult,
                               std::optional<unsigned> apiIndexB)
     {
         bool checkA{false};
@@ -53,10 +54,9 @@ public:
                 createOnNodesUpdateLambda(INVALID_HANDLE, MegaNode::CHANGE_TYPE_NEW, checkB);
         }
         sdk_test::LocalTempFile localFile{fileInfo.name, fileInfo.size};
-        MegaHandle file1Handle = INVALID_HANDLE;
         ASSERT_EQ(MegaError::API_OK,
                   doStartUpload(apiIndexA,
-                                &file1Handle,
+                                &newNodeHandleResult,
                                 fileInfo.name.c_str(),
                                 rootnode,
                                 nullptr /*fileName*/,
@@ -76,11 +76,11 @@ public:
                 << " seconds";
         }
         resetOnNodeUpdateCompletionCBs();
-        std::unique_ptr<MegaNode> nodeFile{megaApi[apiIndexA]->getNodeByHandle(file1Handle)};
+        std::unique_ptr<MegaNode> nodeFile{
+            megaApi[apiIndexA]->getNodeByHandle(newNodeHandleResult)};
         ASSERT_NE(nodeFile, nullptr)
             << "Cannot get the node for the updated file (error: " << mApi[apiIndexA].lastError
             << ")";
-        setNodeAdditionalAttributes(fileInfo, nodeFile);
     }
 
     void matchTree(const MegaHandle rootHandle, unsigned apiIndexA, unsigned apiIndexB) const
@@ -216,7 +216,7 @@ private:
             if (unmatchedChildNodeB->isNodeKeyDecrypted())
                 extraNodes += ":" + string(unmatchedChildNodeB->getName());
         }
-        ASSERT_EQ(indexB.size(), 0) << "Unexpected " << indexB.size() << "node(s) found in the "
+        ASSERT_EQ(indexB.size(), 0) << "Unexpected " << indexB.size() << " node(s) found in the "
                                     << apiIndexB << " account: " << extraNodes;
     }
 };
@@ -335,8 +335,10 @@ TEST_F(SdkTestShareNested, UploadFileInNestedShare)
     LOG_info << logPre
              << "Ensure that the sharer, Alice and Bob can see the same nodes and that the tree is "
                 "decrypted.";
+    waitForNodeToBeDecrypted(shareeAliceIndex, sharerFolderANode->getHandle());
     ASSERT_NO_FATAL_FAILURE(
         matchTree(sharerFolderANode->getHandle(), sharerIndex, shareeAliceIndex));
+    waitForNodeToBeDecrypted(shareeBobIndex, sharerFolderBNode->getHandle());
     ASSERT_NO_FATAL_FAILURE(matchTree(sharerFolderBNode->getHandle(), sharerIndex, shareeBobIndex));
     ASSERT_NO_FATAL_FAILURE(
         matchTree(sharerFolderBNode->getHandle(), shareeAliceIndex, shareeBobIndex));
@@ -346,11 +348,16 @@ TEST_F(SdkTestShareNested, UploadFileInNestedShare)
         << "Bob puts a file in the inshare folder. Check if Alice and the sharer can see the node.";
     auto shareeBobFolderBNode = std::unique_ptr<MegaNode>{
         megaApi[shareeBobIndex]->getNodeByHandle(sharerFolderBNode->getHandle())};
+    MegaHandle fromBobInFolderBHandle = INVALID_HANDLE;
     ASSERT_NO_FATAL_FAILURE(createRemoteFileNode(shareeBobIndex,
                                                  FileNodeInfo("fromBobInFolderB").setSize(100),
                                                  shareeBobFolderBNode.get(),
+                                                 fromBobInFolderBHandle,
                                                  sharerIndex));
+
+    waitForNodeToBeDecrypted(sharerIndex, fromBobInFolderBHandle);
     ASSERT_NO_FATAL_FAILURE(matchTree(sharerFolderBNode->getHandle(), sharerIndex, shareeBobIndex));
+    waitForNodeToBeDecrypted(shareeAliceIndex, fromBobInFolderBHandle);
     ASSERT_NO_FATAL_FAILURE(
         matchTree(sharerFolderBNode->getHandle(), shareeAliceIndex, shareeBobIndex));
 }
