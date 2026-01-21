@@ -2614,6 +2614,7 @@ public:
     // Enable streaming parsing action packets
     inline void enableStreaming()
     {
+        assert(!jsonsc.pos);
         mStreamingEnabled = true;
         if (pendingsc)
         {

@@ -46,6 +46,7 @@ public:
     void clear();
     void clearActionPacketData();
 
+private:
     // Operate locks
     void acquireLock();
     void releaseLock();

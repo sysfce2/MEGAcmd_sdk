@@ -25277,7 +25277,7 @@ void MegaClient::handleScTimeoutInFlightState()
 
 void MegaClient::handleScInStreaming()
 {
-    if (!jsonsc.pos && !pendingscUserAlerts && pendingsc)
+    if (!pendingscUserAlerts && pendingsc)
     {
 #ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
         if (globalMegaTestHooks.interceptSCRequest)
