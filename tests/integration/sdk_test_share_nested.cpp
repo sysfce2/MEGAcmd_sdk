@@ -107,11 +107,31 @@ public:
             defaultTimeoutMs);
     }
 
+    void reloginAccount(unsigned idx, bool forceNoCachedFetchnodes = false)
+    {
+        ASSERT_NO_FATAL_FAILURE(logout(idx, false, maxTimeout));
+        ASSERT_NO_FATAL_FAILURE(login(idx));
+        if (forceNoCachedFetchnodes)
+        {
+            megaApi[idx]->getClient()->fetchnodesAlreadyCompletedThisSession = true;
+        }
+        ASSERT_NO_FATAL_FAILURE(fetchnodes(idx));
+    }
+
+    void reloginAllAccounts(bool forceNoCachedFetchnodes = false)
+    {
+        for (auto idx: std::array{sharerIndex, shareeAliceIndex, shareeBobIndex})
+        {
+            reloginAccount(idx, forceNoCachedFetchnodes);
+        }
+    }
+
 protected:
     // Name of the initial elements in the remote tree
     static constexpr auto FOLDER_A = "folderA";
     static constexpr auto FOLDER_B = "folderB";
     static constexpr auto FOLDER_C = "folderC";
+    static constexpr auto FOLDER_EXP = "exportedFolder";
     static constexpr auto FILE_A = "fileA";
     static constexpr auto FILE_B = "fileB";
     static constexpr auto FILE_C = "fileC";
@@ -122,10 +142,11 @@ protected:
 
 private:
     // root in the cloud where the tree is created
-    const std::string rootTestDir{"locklessCS"};
+    const std::string rootTestDir{"SdkTestShareNested"};
 
     // It represents the following tree:
     // RemoteRoot
+    // ├── "exportedFolder"
     // └── "folderA"
     //     ├── "fileA"
     //     └── "folderB"
@@ -138,7 +159,8 @@ private:
             .addChild(
                 DirNodeInfo(FOLDER_B)
                     .addChild(FileNodeInfo(FILE_B).setSize(100))
-                    .addChild(DirNodeInfo(FOLDER_C).addChild(FileNodeInfo(FILE_C).setSize(100))))};
+                    .addChild(DirNodeInfo(FOLDER_C).addChild(FileNodeInfo(FILE_C).setSize(100)))),
+        DirNodeInfo(FOLDER_EXP)};
 
     // Check if the passed nodes have the same handle, if they are are decrypted and if they have
     // the same name. Print meaninful messages depending on the assert.
@@ -273,15 +295,7 @@ TEST_F(SdkTestShareNested, BasicNestedShares)
         matchTree(sharerFolderBNode->getHandle(), shareeAliceIndex, shareeBobIndex));
 
     LOG_info << logPre << "Logout and login to ensure that all is correct after fetching nodes.";
-    ASSERT_NO_FATAL_FAILURE(logout(sharerIndex, false, maxTimeout));
-    ASSERT_NO_FATAL_FAILURE(login(sharerIndex));
-    ASSERT_NO_FATAL_FAILURE(fetchnodes(sharerIndex));
-    ASSERT_NO_FATAL_FAILURE(logout(shareeAliceIndex, false, maxTimeout));
-    ASSERT_NO_FATAL_FAILURE(login(shareeAliceIndex));
-    ASSERT_NO_FATAL_FAILURE(fetchnodes(shareeAliceIndex));
-    ASSERT_NO_FATAL_FAILURE(logout(shareeBobIndex, false, maxTimeout));
-    ASSERT_NO_FATAL_FAILURE(login(shareeBobIndex));
-    ASSERT_NO_FATAL_FAILURE(fetchnodes(shareeBobIndex));
+    ASSERT_NO_FATAL_FAILURE(reloginAllAccounts());
 
     LOG_info << logPre
              << "Check again that the sharer, Alice and Bob can see the same nodes and that "
@@ -364,33 +378,18 @@ TEST_F(SdkTestShareNested, UploadFileInNestedShare)
     // Enable the piece below after SDK-5743
     /*
         LOG_info << logPre << "Logout and login to ensure that all is correct after fetching
-       nodes."; ASSERT_NO_FATAL_FAILURE(logout(sharerIndex, false, maxTimeout));
-        ASSERT_NO_FATAL_FAILURE(login(sharerIndex));
-        // Force fresh cached fetchnodes response from API
-        megaApi[sharerIndex]->getClient()->fetchnodesAlreadyCompletedThisSession = true;
-        ASSERT_NO_FATAL_FAILURE(fetchnodes(sharerIndex));
-
-        ASSERT_NO_FATAL_FAILURE(logout(shareeAliceIndex, false, maxTimeout));
-        ASSERT_NO_FATAL_FAILURE(login(shareeAliceIndex));
-        // Force fresh cached fetchnodes response from API
-        megaApi[shareeAliceIndex]->getClient()->fetchnodesAlreadyCompletedThisSession = true;
-        ASSERT_NO_FATAL_FAILURE(fetchnodes(shareeAliceIndex));
-
-        ASSERT_NO_FATAL_FAILURE(logout(shareeBobIndex, false, maxTimeout));
-        ASSERT_NO_FATAL_FAILURE(login(shareeBobIndex));
-        // Force fresh cached fetchnodes response from API
-        megaApi[shareeBobIndex]->getClient()->fetchnodesAlreadyCompletedThisSession = true;
-        ASSERT_NO_FATAL_FAILURE(fetchnodes(shareeBobIndex));
+       nodes.";
+        ASSERT_NO_FATAL_FAILURE(reloginAllAccounts(true));
 
         LOG_info << logPre
-                 << "Check again that the sharer, Alice and Bob can see the same nodes and that "
-                    "the tree is decrypted.";
+                 << "Check again that the sharer, Alice and Bob can see the same nodes and that
+   " "the tree is decrypted after a fresh fetchnodes.";
         ASSERT_NO_FATAL_FAILURE(
             matchTree(sharerFolderANode->getHandle(), sharerIndex, shareeAliceIndex));
         ASSERT_NO_FATAL_FAILURE(matchTree(sharerFolderBNode->getHandle(), sharerIndex,
        shareeBobIndex)); ASSERT_NO_FATAL_FAILURE( matchTree(sharerFolderBNode->getHandle(),
        shareeAliceIndex, shareeBobIndex));
-        */
+    */
 }
 
 /**
@@ -507,4 +506,114 @@ TEST_F(SdkTestShareNested, SyncStateWithNestedShareFolders)
 
     LOG_info << logPre << "Cleanup: remove sync";
     ASSERT_EQ(API_OK, synchronousRemoveSync(shareeAliceIndex, backupId));
+}
+
+/**
+ * @brief Test the in/outshare count when a nested share is involved.
+ *
+ * It test if the functions related to get the list of inshares and outshares work correctly when a
+ * nested share is involved. A folder public link is also created to ensure that all kind of shares
+ * are working as expected.
+ */
+TEST_F(SdkTestShareNested, ShareCount)
+{
+    const auto checkShareCounters = [this]()
+    {
+        unique_ptr<MegaShareList> shareList;
+        unique_ptr<MegaNodeList> nodeList;
+        // Check sharer int/outshares count.
+        shareList.reset(megaApi[sharerIndex]->getOutShares());
+        ASSERT_EQ(shareList->size(), 2);
+        shareList.reset(megaApi[sharerIndex]->getInSharesList());
+        ASSERT_EQ(shareList->size(), 0);
+        shareList.reset(megaApi[sharerIndex]->getPendingOutShares());
+        ASSERT_EQ(shareList->size(), 0);
+        shareList.reset(megaApi[sharerIndex]->getUnverifiedInShares());
+        ASSERT_EQ(shareList->size(), 0);
+        shareList.reset(megaApi[sharerIndex]->getUnverifiedOutShares());
+        ASSERT_EQ(shareList->size(), 0);
+        nodeList.reset(megaApi[sharerIndex]->getPublicLinks());
+        ASSERT_EQ(nodeList->size(), 1);
+
+        // Check Alice int/outshares count.
+        shareList.reset(megaApi[shareeAliceIndex]->getOutShares());
+        ASSERT_EQ(shareList->size(), 0);
+        shareList.reset(megaApi[shareeAliceIndex]->getInSharesList());
+        ASSERT_EQ(shareList->size(), 1);
+        shareList.reset(megaApi[shareeAliceIndex]->getPendingOutShares());
+        ASSERT_EQ(shareList->size(), 0);
+        shareList.reset(megaApi[shareeAliceIndex]->getUnverifiedInShares());
+        ASSERT_EQ(shareList->size(), 0);
+        shareList.reset(megaApi[shareeAliceIndex]->getUnverifiedOutShares());
+        ASSERT_EQ(shareList->size(), 0);
+        nodeList.reset(megaApi[shareeAliceIndex]->getPublicLinks());
+        ASSERT_EQ(nodeList->size(), 0);
+
+        // Check Bob int/outshares count.
+        shareList.reset(megaApi[shareeBobIndex]->getOutShares());
+        ASSERT_EQ(shareList->size(), 0);
+        shareList.reset(megaApi[shareeBobIndex]->getInSharesList());
+        ASSERT_EQ(shareList->size(), 1);
+        shareList.reset(megaApi[shareeBobIndex]->getPendingOutShares());
+        ASSERT_EQ(shareList->size(), 0);
+        shareList.reset(megaApi[shareeBobIndex]->getUnverifiedInShares());
+        ASSERT_EQ(shareList->size(), 0);
+        shareList.reset(megaApi[shareeBobIndex]->getUnverifiedOutShares());
+        ASSERT_EQ(shareList->size(), 0);
+        nodeList.reset(megaApi[shareeBobIndex]->getPublicLinks());
+        ASSERT_EQ(nodeList->size(), 0);
+    };
+
+    CASE_info << " start.";
+
+    // Make sharer and sharees contacts.
+    ASSERT_NO_FATAL_FAILURE(
+        inviteTestAccount(sharerIndex, shareeAliceIndex, "Sharer inviting Alice"))
+        << "Failure inviting Alice";
+    ASSERT_NO_FATAL_FAILURE(inviteTestAccount(sharerIndex, shareeBobIndex, "Sharer inviting Bob"))
+        << "Failure inviting Bob";
+
+    if (gManualVerification)
+    {
+        ASSERT_NO_FATAL_FAILURE(verifyContactCredentials(sharerIndex, shareeAliceIndex));
+        ASSERT_NO_FATAL_FAILURE(verifyContactCredentials(sharerIndex, shareeBobIndex));
+    }
+
+    CASE_info << "Share folder \"folderA\" to Alice and subfolder \"folderB\" to Bob.";
+    auto sharerFolderANode = getNodeByPath(FOLDER_A);
+    auto sharerFolderBNode = getNodeByPath(string(FOLDER_A) + "/" + FOLDER_B);
+    ASSERT_TRUE(sharerFolderANode) << "folder \"folderA\" not found.";
+    ASSERT_TRUE(sharerFolderBNode) << "folder \"folderB\" not found.";
+    ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderANode.get(),
+                                            {sharerIndex, true},
+                                            {shareeAliceIndex, true},
+                                            MegaShare::ACCESS_FULL));
+    ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderBNode.get(),
+                                            {sharerIndex, true},
+                                            {shareeBobIndex, true},
+                                            MegaShare::ACCESS_FULL));
+
+    CASE_info << "Create a folder public link in the sharer.";
+    auto sharerExportedFolderNode = getNodeByPath(FOLDER_EXP);
+    ASSERT_TRUE(sharerExportedFolderNode) << "folder \"exportedFolder\" not found.";
+    string returnedLink = createPublicLink(sharerIndex,
+                                           sharerExportedFolderNode.get(),
+                                           0,
+                                           maxTimeout,
+                                           mApi[sharerIndex].accountDetails->getProLevel() == 0);
+    sharerExportedFolderNode = getNodeByPath(FOLDER_EXP);
+    ASSERT_TRUE(sharerExportedFolderNode) << "Exported node is no longer present.";
+    ASSERT_TRUE(sharerExportedFolderNode->isExported()) << "Failure exporting the folder.";
+    std::unique_ptr<char[]> folderPublicLink{sharerExportedFolderNode->getPublicLink()};
+    ASSERT_STREQ(returnedLink.c_str(), folderPublicLink.get());
+
+    waitForNodeToBeDecrypted(shareeAliceIndex, sharerFolderANode->getHandle());
+    waitForNodeToBeDecrypted(shareeBobIndex, sharerFolderBNode->getHandle());
+
+    CASE_info << "Checking in/out shares count when there is a nested share.";
+    ASSERT_NO_FATAL_FAILURE(checkShareCounters());
+
+    CASE_info << "Logout and login to ensure that all counters are ok after a fresh login.";
+    ASSERT_NO_FATAL_FAILURE(reloginAllAccounts());
+    ASSERT_NO_FATAL_FAILURE(checkShareCounters());
 }
