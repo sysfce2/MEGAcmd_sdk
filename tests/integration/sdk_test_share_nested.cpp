@@ -360,6 +360,37 @@ TEST_F(SdkTestShareNested, UploadFileInNestedShare)
     waitForNodeToBeDecrypted(shareeAliceIndex, fromBobInFolderBHandle);
     ASSERT_NO_FATAL_FAILURE(
         matchTree(sharerFolderBNode->getHandle(), shareeAliceIndex, shareeBobIndex));
+
+    // Enable the piece below after SDK-5743
+    /*
+        LOG_info << logPre << "Logout and login to ensure that all is correct after fetching
+       nodes."; ASSERT_NO_FATAL_FAILURE(logout(sharerIndex, false, maxTimeout));
+        ASSERT_NO_FATAL_FAILURE(login(sharerIndex));
+        // Force fresh cached fetchnodes response from API
+        megaApi[sharerIndex]->getClient()->fetchnodesAlreadyCompletedThisSession = true;
+        ASSERT_NO_FATAL_FAILURE(fetchnodes(sharerIndex));
+
+        ASSERT_NO_FATAL_FAILURE(logout(shareeAliceIndex, false, maxTimeout));
+        ASSERT_NO_FATAL_FAILURE(login(shareeAliceIndex));
+        // Force fresh cached fetchnodes response from API
+        megaApi[shareeAliceIndex]->getClient()->fetchnodesAlreadyCompletedThisSession = true;
+        ASSERT_NO_FATAL_FAILURE(fetchnodes(shareeAliceIndex));
+
+        ASSERT_NO_FATAL_FAILURE(logout(shareeBobIndex, false, maxTimeout));
+        ASSERT_NO_FATAL_FAILURE(login(shareeBobIndex));
+        // Force fresh cached fetchnodes response from API
+        megaApi[shareeBobIndex]->getClient()->fetchnodesAlreadyCompletedThisSession = true;
+        ASSERT_NO_FATAL_FAILURE(fetchnodes(shareeBobIndex));
+
+        LOG_info << logPre
+                 << "Check again that the sharer, Alice and Bob can see the same nodes and that "
+                    "the tree is decrypted.";
+        ASSERT_NO_FATAL_FAILURE(
+            matchTree(sharerFolderANode->getHandle(), sharerIndex, shareeAliceIndex));
+        ASSERT_NO_FATAL_FAILURE(matchTree(sharerFolderBNode->getHandle(), sharerIndex,
+       shareeBobIndex)); ASSERT_NO_FATAL_FAILURE( matchTree(sharerFolderBNode->getHandle(),
+       shareeAliceIndex, shareeBobIndex));
+        */
 }
 
 /**
