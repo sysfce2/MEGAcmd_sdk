@@ -25054,10 +25054,8 @@ void MegaClient::handleScNonStreaming()
             case REQ_SUCCESS:
                 pendingscTimedOut = false;
 
-                if (pendingsc->contentlength == 1 && pendingsc->in.size() &&
-                    pendingsc->in[0] == '0')
+                if (handleScKeepAliveInSuccessState())
                 {
-                    handleScKeepAliveInSuccessState();
                     break;
                 }
 
@@ -25083,11 +25081,7 @@ void MegaClient::handleScNonStreaming()
                 break;
 
             case REQ_INFLIGHT:
-                if (!pendingscTimedOut &&
-                    Waiter::ds >= (pendingsc->lastdata + HttpIO::SCREQUESTTIMEOUT))
-                {
-                    handleScTimeoutInFlightState();
-                }
+                handleScTimeoutInFlightState();
                 break;
             default:
                 break;
@@ -25117,19 +25111,15 @@ void MegaClient::processScMessageNonStreaming()
     return;
 }
 
-void MegaClient::handleScKeepAliveInSuccessState()
+bool MegaClient::handleScKeepAliveInSuccessState()
 {
-    LOG_debug << "SC keep-alive received";
-    resetScRequest();
-
-    // In non-streaming mode this is always false
-    if (scStreamingParser.hasStarted())
+    if (pendingsc->contentlength == 1 && pendingsc->in.size() && pendingsc->in[0] == '0')
     {
-        // Let streaming parser deal with this unexpected keep-alive message between
-        // chunks
-        mStreamingContinue = true;
+        LOG_debug << "SC keep-alive received";
+        resetScRequest();
+        return true;
     }
-    return;
+    return false;
 }
 
 void MegaClient::handleScErrorInSuccessState()
@@ -25265,14 +25255,19 @@ void MegaClient::handleScInFailureState()
     return;
 }
 
-void MegaClient::handleScTimeoutInFlightState()
+bool MegaClient::handleScTimeoutInFlightState()
 {
-    LOG_debug << clientname << "sc timeout expired at ds: " << Waiter::ds
-              << " and lastdata ds: " << pendingsc->lastdata;
-    // In almost all cases the server won't take more than SCREQUESTTIMEOUT seconds.
-    // But if it does, break the cycle of endless requests for the same thing
-    pendingscTimedOut = true;
-    resetScRequest();
+    if (!pendingscTimedOut && Waiter::ds >= (pendingsc->lastdata + HttpIO::SCREQUESTTIMEOUT))
+    {
+        LOG_debug << clientname << "sc timeout expired at ds: " << Waiter::ds
+                  << " and lastdata ds: " << pendingsc->lastdata;
+        // In almost all cases the server won't take more than SCREQUESTTIMEOUT seconds.
+        // But if it does, break the cycle of endless requests for the same thing
+        pendingscTimedOut = true;
+        resetScRequest();
+        return true;
+    }
+    return false;
 }
 
 void MegaClient::handleScInStreaming()
@@ -25290,13 +25285,6 @@ void MegaClient::handleScInStreaming()
         {
             case REQ_SUCCESS:
                 pendingscTimedOut = false;
-
-                if (pendingsc->contentlength == 1 && pendingsc->in.size() &&
-                    pendingsc->in[0] == '0')
-                {
-                    handleScKeepAliveInSuccessState();
-                    break;
-                }
 
                 if (scStreamingParser.hasStarted() || *pendingsc->in.c_str() == '{')
                 {
@@ -25321,10 +25309,8 @@ void MegaClient::handleScInStreaming()
                 break;
 
             case REQ_INFLIGHT:
-                if (!pendingscTimedOut &&
-                    Waiter::ds >= (pendingsc->lastdata + HttpIO::SCREQUESTTIMEOUT))
+                if (handleScTimeoutInFlightState())
                 {
-                    handleScTimeoutInFlightState();
                     clearStreamingParser();
                 }
                 else
@@ -25375,8 +25361,7 @@ void MegaClient::processScMessageInStreaming()
                 }
 
                 clearStreamingParser();
-                pendingsc.reset();
-                btsc.reset();
+                resetScRequest();
 
                 abortBackoffTimerForCsRequest();
             }

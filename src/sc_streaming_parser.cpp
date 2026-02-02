@@ -19,7 +19,6 @@ void ScStreamingParser::init()
                      {
                          mOriginalAC = mClient.actionpacketsCurrent;
                          mClient.actionpacketsCurrent = false;
-                         mClient.insca = false;
                          mClient.insca_notlast = false;
 
                          return JSONSplitter::CallbackResult::SUCCESS;

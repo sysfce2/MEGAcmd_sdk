@@ -2595,10 +2595,10 @@ public:
     void handleScNonStreaming();
     void handleScInStreaming();
 
-    void handleScKeepAliveInSuccessState();
+    bool handleScKeepAliveInSuccessState();
     void handleScErrorInSuccessState();
     void handleScInFailureState();
-    void handleScTimeoutInFlightState();
+    bool handleScTimeoutInFlightState();
 
     // Process actual data from the server-client channel
     void processScMessageNonStreaming();
