@@ -25117,13 +25117,6 @@ bool MegaClient::handleScKeepAliveInSuccessState()
     {
         LOG_debug << "SC keep-alive received";
         resetScRequest();
-        // In non-streaming mode this is always false
-        if (scStreamingParser.hasStarted())
-        {
-            // Let streaming parser deal with this unexpected keep-alive message
-            // chunk
-            setStreamingContinue();
-        }
         return true;
     }
     return false;
@@ -25295,6 +25288,8 @@ void MegaClient::handleScInStreaming()
 
                 if (handleScKeepAliveInSuccessState())
                 {
+                    assert(!scStreamingParser.hasStarted() &&
+                           "Keep-alive packet between actionpacket chunks");
                     break;
                 }
 
