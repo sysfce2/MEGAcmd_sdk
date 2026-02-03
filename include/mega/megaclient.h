@@ -32,7 +32,6 @@
 #include "http.h"
 #include "json.h"
 #include "mediafileattribute.h"
-#include "megaapp.h"
 #include "name_collision.h"
 #include "nodemanager.h"
 #include "pendingcontactrequest.h"
@@ -2658,15 +2657,7 @@ public:
                (!isStreamingEnabled() && jsonsc.pos);
     }
 
-    inline void setStreamingContinue()
-    {
-        mStreamingContinue = true;
-        scStreamingParser.setLastReceived();
-        app->notify_network_activity(NetworkActivityChannel::SC,
-                                     NetworkActivityType::REQUEST_RECEIVED,
-                                     API_OK);
-        return;
-    }
+    void setStreamingContinue();
 
     size_t procreqstat();
 

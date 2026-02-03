@@ -25378,4 +25378,14 @@ void MegaClient::processScMessageInStreaming()
     return;
 }
 
+void MegaClient::setStreamingContinue()
+{
+    mStreamingContinue = true;
+    scStreamingParser.setLastReceived();
+    app->notify_network_activity(NetworkActivityChannel::SC,
+                                 NetworkActivityType::REQUEST_RECEIVED,
+                                 API_OK);
+    return;
+}
+
 } // namespace
