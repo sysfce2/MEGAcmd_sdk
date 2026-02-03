@@ -29,22 +29,20 @@ namespace mega
 TreeFilters::TreeFilters(MegaClient& client):
     mClient(client)
 {
-    clear();
+    clearData();
+    initFilters();
 }
 
 bool TreeFilters::isStarted()
 {
-    return mStarted;
+    return mFiltersIt.has_value();
 }
 
-void TreeFilters::start(std::map<std::string, JSONSplitter::FilterCallback>& filters,
-                        std::function<void()> preAction)
+void TreeFilters::start(JSONSplitter::FiltersChain& filtersChain, std::function<void()> preAction)
 {
-    mStarted = true;
-
     mPreAction = std::move(preAction);
 
-    setFilters(filters);
+    setFilters(filtersChain);
 
     if (!mClient.loggedIntoFolder())
     {
@@ -52,7 +50,7 @@ void TreeFilters::start(std::map<std::string, JSONSplitter::FilterCallback>& fil
     }
 }
 
-void TreeFilters::end(std::map<std::string, JSONSplitter::FilterCallback>& filters)
+void TreeFilters::end(JSONSplitter::FiltersChain& filtersChain)
 {
     mClient.mergenewshares(1);
 
@@ -61,127 +59,128 @@ void TreeFilters::end(std::map<std::string, JSONSplitter::FilterCallback>& filte
         mClient.useralerts.convertNotedSharedNodes(true, mOriginatingUser);
     }
 
-    clear(filters);
-
-    mStarted = false;
+    clear(filtersChain);
 }
 
-void TreeFilters::clear(std::map<std::string, JSONSplitter::FilterCallback>& filters)
+void TreeFilters::clear(JSONSplitter::FiltersChain& filtersChain)
 {
-    clearFilters(filters);
-    clear();
+    clearFilters(filtersChain);
+    clearData();
 }
 
 // Private
 
-void TreeFilters::setFilters(std::map<std::string, JSONSplitter::FilterCallback>& filters)
+void TreeFilters::initFilters()
 {
     // Nodes (one by one)
-    filters.emplace("{[a{{t[f{",
-                    [this](JSON* json)
-                    {
-                        execPreAction();
+    mFilters.emplace("{[a{{t[f{",
+                     [this](JSON* json)
+                     {
+                         execPreAction();
 
-                        if (mFirstNode)
-                        {
-                            mFirstNode = false;
-                            mPutNodesCmd = dynamic_cast<CommandPutNodes*>(
-                                mClient.reqs.getCurrentCommand(mClient.mCurrentSeqtagSeen));
+                         if (mFirstNode)
+                         {
+                             mFirstNode = false;
+                             mPutNodesCmd = dynamic_cast<CommandPutNodes*>(
+                                 mClient.reqs.getCurrentCommand(mClient.mCurrentSeqtagSeen));
 
-                            if (mPutNodesCmd)
-                            {
-                                mPutNodesCmd->emptyResponse = false;
-                            }
-                        }
+                             if (mPutNodesCmd)
+                             {
+                                 mPutNodesCmd->emptyResponse = false;
+                             }
+                         }
 
-                        readNode(json);
-                        return JSONSplitter::ResultFromBool(json->leaveobject());
-                    });
+                         readNode(json);
+                         return JSONSplitter::ResultFromBool(json->leaveobject());
+                     });
 
     // End of node array
-    filters.emplace("{[a{{t[f",
-                    [this](JSON* json)
-                    {
-                        execPreAction();
+    mFilters.emplace("{[a{{t[f",
+                     [this](JSON* json)
+                     {
+                         execPreAction();
 
-                        if (mFirstNode && mPutNodesCmd)
-                        {
-                            // 'f' is empty
-                            mPutNodesCmd->emptyResponse = true;
-                        }
+                         if (mFirstNode && mPutNodesCmd)
+                         {
+                             // 'f' is empty
+                             mPutNodesCmd->emptyResponse = true;
+                         }
 
-                        postReadNodes();
+                         postReadNodes();
 
-                        json->enterarray();
-                        return JSONSplitter::ResultFromBool(json->leavearray());
-                    });
+                         json->enterarray();
+                         return JSONSplitter::ResultFromBool(json->leavearray());
+                     });
 
     // Version nodes (one by one)
-    filters.emplace("{[a{{t[f2{",
-                    [this](JSON* json)
-                    {
-                        execPreAction();
+    mFilters.emplace("{[a{{t[f2{",
+                     [this](JSON* json)
+                     {
+                         execPreAction();
 
-                        if (mFirstNode)
-                        {
-                            mFirstNode = false;
-                            mPutNodesCmd = dynamic_cast<CommandPutNodes*>(
-                                mClient.reqs.getCurrentCommand(mClient.mCurrentSeqtagSeen));
-                        }
+                         if (mFirstNode)
+                         {
+                             mFirstNode = false;
+                             mPutNodesCmd = dynamic_cast<CommandPutNodes*>(
+                                 mClient.reqs.getCurrentCommand(mClient.mCurrentSeqtagSeen));
+                         }
 
-                        readNode(json);
-                        return JSONSplitter::ResultFromBool(json->leaveobject());
-                    });
+                         readNode(json);
+                         return JSONSplitter::ResultFromBool(json->leaveobject());
+                     });
 
     // End of version nodes array
-    filters.emplace("{[a{{t[f2",
-                    [this](JSON* json)
-                    {
-                        execPreAction();
-                        postReadNodes();
+    mFilters.emplace("{[a{{t[f2",
+                     [this](JSON* json)
+                     {
+                         execPreAction();
+                         postReadNodes();
 
-                        json->enterarray();
-                        return JSONSplitter::ResultFromBool(json->leavearray());
-                    });
+                         json->enterarray();
+                         return JSONSplitter::ResultFromBool(json->leavearray());
+                     });
 
     // Users (one by one)
-    filters.emplace("{[a{{t[u{",
-                    [this](JSON* json)
-                    {
-                        execPreAction();
-                        readUser(json);
-                        return JSONSplitter::ResultFromBool(json->leaveobject());
-                    });
+    mFilters.emplace("{[a{{t[u{",
+                     [this](JSON* json)
+                     {
+                         execPreAction();
+                         readUser(json);
+                         return JSONSplitter::ResultFromBool(json->leaveobject());
+                     });
 
     // End of user array
-    filters.emplace("{[a{{t[u",
-                    [this](JSON* json)
-                    {
-                        execPreAction();
-                        clearUserListData();
+    mFilters.emplace("{[a{{t[u",
+                     [this](JSON* json)
+                     {
+                         execPreAction();
+                         clearUserListData();
 
-                        json->enterarray();
-                        return JSONSplitter::ResultFromBool(json->leavearray());
-                    });
+                         json->enterarray();
+                         return JSONSplitter::ResultFromBool(json->leavearray());
+                     });
 
-    filters.emplace("{[a{\"ou",
-                    [this](JSON* json)
-                    {
-                        execPreAction();
-                        mOriginatingUser = json->gethandle(MegaClient::USERHANDLE);
-                        return JSONSplitter::CallbackResult::SUCCESS;
-                    });
+    mFilters.emplace("{[a{\"ou",
+                     [this](JSON* json)
+                     {
+                         execPreAction();
+                         mOriginatingUser = json->gethandle(MegaClient::USERHANDLE);
+                         return JSONSplitter::CallbackResult::SUCCESS;
+                     });
 }
 
-void TreeFilters::clearFilters(std::map<std::string, JSONSplitter::FilterCallback>& filters)
+void TreeFilters::setFilters(JSONSplitter::FiltersChain& filtersChain)
 {
-    filters.erase("{[a{{t[f{");
-    filters.erase("{[a{{t[f");
-    filters.erase("{[a{{t[f2{");
-    filters.erase("{[a{{t[f2");
-    filters.erase("{[a{{t[u{");
-    filters.erase("{[a{{t[u");
-    filters.erase("{[a{\"ou");
+    mFiltersIt = filtersChain.emplace(std::end(filtersChain), &mFilters);
+}
+
+void TreeFilters::clearFilters(JSONSplitter::FiltersChain& filtersChain)
+{
+    if (mFiltersIt.has_value())
+    {
+        filtersChain.erase(*mFiltersIt);
+        mFiltersIt = std::nullopt;
+    }
 }
 
 void TreeFilters::execPreAction()
@@ -248,7 +247,7 @@ void TreeFilters::readUser(JSON* json)
     }
 }
 
-void TreeFilters::clear()
+void TreeFilters::clearData()
 {
     mPreAction = nullptr;
     mOriginatingUser = UNDEF;

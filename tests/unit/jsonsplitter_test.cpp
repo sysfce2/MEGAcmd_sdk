@@ -660,6 +660,7 @@ TEST_F(JSONSplitterTest, ProcessChunkWithFiltersChainContainingDuplicatedFilter)
     auto consumed = splitter.processChunk(chain, testJson.c_str());
 
     EXPECT_EQ(consumed, static_cast<m_off_t>(testJson.length()));
+    EXPECT_NE(consumed, 0);
     EXPECT_TRUE(splitter.hasFinished());
     EXPECT_FALSE(splitter.hasFailed());
     EXPECT_FALSE(splitter.hasPaused());

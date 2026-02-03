@@ -35,8 +35,9 @@ class TreeFilters
 {
 private:
     MegaClient& mClient;
-    std::function<void()> mPreAction;
-    bool mStarted;
+    std::map<std::string, JSONSplitter::FilterCallback> mFilters;
+    std::optional<JSONSplitter::FiltersChain::iterator> mFiltersIt = std::nullopt;
+    std::function<void()> mPreAction = nullptr;
 
     handle mOriginatingUser;
 
@@ -55,15 +56,16 @@ private:
     // For user list
     bool mUserError;
 
-    void setFilters(std::map<std::string, JSONSplitter::FilterCallback>& filters);
-    void clearFilters(std::map<std::string, JSONSplitter::FilterCallback>& filters);
+    void initFilters();
+    void setFilters(JSONSplitter::FiltersChain& filtersChain);
+    void clearFilters(JSONSplitter::FiltersChain& filtersChain);
 
     void execPreAction();
     void readNode(JSON* json);
     void postReadNodes();
     void readUser(JSON* json);
 
-    void clear();
+    void clearData();
     void clearNodeListData();
     void clearUserListData();
 
@@ -72,10 +74,9 @@ public:
 
     bool isStarted();
 
-    void start(std::map<std::string, JSONSplitter::FilterCallback>& filters,
-               std::function<void()> preAction);
-    void end(std::map<std::string, JSONSplitter::FilterCallback>& filters);
-    void clear(std::map<std::string, JSONSplitter::FilterCallback>& filters);
+    void start(JSONSplitter::FiltersChain& filtersChain, std::function<void()> preAction);
+    void end(JSONSplitter::FiltersChain& filtersChain);
+    void clear(JSONSplitter::FiltersChain& filtersChain);
 };
 
 }

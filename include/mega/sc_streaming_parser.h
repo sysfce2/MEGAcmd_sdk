@@ -36,6 +36,7 @@ private:
     MegaClient& mClient;
     JSONSplitter mJsonSplitter;
     std::map<std::string, JSONSplitter::FilterCallback> mFilters;
+    JSONSplitter::FiltersChain mFiltersChain;
     bool mLast;
 
     // For one action packet

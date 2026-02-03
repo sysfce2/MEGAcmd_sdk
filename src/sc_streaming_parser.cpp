@@ -71,7 +71,7 @@ void ScStreamingParser::init()
 
                          if (mActionName == makeNameid("t"))
                          {
-                             mTreeFilters.start(mFilters,
+                             mTreeFilters.start(mFiltersChain,
                                                 [this]()
                                                 {
                                                     checkActionPacket();
@@ -117,7 +117,7 @@ void ScStreamingParser::init()
                          }
                          else if (mTreeFilters.isStarted())
                          {
-                             mTreeFilters.end(mFilters);
+                             mTreeFilters.end(mFiltersChain);
                              mLastAPDeletedNode.reset();
                          }
                          else
@@ -193,11 +193,13 @@ void ScStreamingParser::init()
                          mCcst.reset();
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
+
+    mFiltersChain.emplace_back(&mFilters);
 }
 
 m_off_t ScStreamingParser::process(const char* data)
 {
-    return mJsonSplitter.processChunk(&mFilters, data);
+    return mJsonSplitter.processChunk(mFiltersChain, data);
 }
 
 bool ScStreamingParser::hasStarted()
@@ -234,7 +236,7 @@ void ScStreamingParser::clear()
 {
     if (mTreeFilters.isStarted())
     {
-        mTreeFilters.clear(mFilters);
+        mTreeFilters.clear(mFiltersChain);
     }
 
     mJsonSplitter.clear();
