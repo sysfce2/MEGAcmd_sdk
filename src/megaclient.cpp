@@ -25117,6 +25117,13 @@ bool MegaClient::handleScKeepAliveInSuccessState()
     {
         LOG_debug << "SC keep-alive received";
         resetScRequest();
+        // In non-streaming mode this is always false
+        if (scStreamingParser.hasStarted())
+        {
+            // Let streaming parser deal with this unexpected keep-alive message
+            // chunk
+            setStreamingContinue();
+        }
         return true;
     }
     return false;
@@ -25286,16 +25293,17 @@ void MegaClient::handleScInStreaming()
             case REQ_SUCCESS:
                 pendingscTimedOut = false;
 
+                if (handleScKeepAliveInSuccessState())
+                {
+                    break;
+                }
+
                 if (scStreamingParser.hasStarted() || *pendingsc->in.c_str() == '{')
                 {
                     // There are two scenarios:
                     // 1. received one complete JSON message
                     // 2. recevied the last chunk of the JSON message
-                    mStreamingContinue = true;
-                    scStreamingParser.setLastReceived();
-                    app->notify_network_activity(NetworkActivityChannel::SC,
-                                                 NetworkActivityType::REQUEST_RECEIVED,
-                                                 API_OK);
+                    setStreamingContinue();
                     break;
                 }
                 else
