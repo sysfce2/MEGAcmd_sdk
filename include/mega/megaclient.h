@@ -2627,6 +2627,10 @@ public:
     {
         assert(!scStreamingParser.hasStarted());
         mStreamingEnabled = false;
+        if (pendingsc)
+        {
+            pendingsc->mChunked = false;
+        }
     }
 
     inline void clearStreamingParser()
