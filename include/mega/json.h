@@ -252,7 +252,7 @@ public:
     // they are complete
     m_off_t processChunk(const FiltersChain& filtersList, const char* data);
 
-    m_off_t processChunk(FiltersChain& filtersList, const char* data);
+    m_off_t processChunk(const FiltersChain& filtersList, const char* data);
 
     // Check if the parsing has finished
     bool hasFinished();

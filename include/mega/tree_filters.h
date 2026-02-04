@@ -57,8 +57,8 @@ private:
     bool mUserError;
 
     void initFilters();
-    void setFilters(JSONSplitter::FiltersChain& filtersChain);
-    void clearFilters(JSONSplitter::FiltersChain& filtersChain);
+    void addFilters(JSONSplitter::FiltersChain& filtersChain);
+    void removeFilters(JSONSplitter::FiltersChain& filtersChain);
 
     void execPreAction();
     void readNode(JSON* json);

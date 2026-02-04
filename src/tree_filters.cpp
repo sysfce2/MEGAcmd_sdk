@@ -42,7 +42,7 @@ void TreeFilters::start(JSONSplitter::FiltersChain& filtersChain, std::function<
 {
     mPreAction = std::move(preAction);
 
-    setFilters(filtersChain);
+    addFilters(filtersChain);
 
     if (!mClient.loggedIntoFolder())
     {
@@ -64,7 +64,7 @@ void TreeFilters::end(JSONSplitter::FiltersChain& filtersChain)
 
 void TreeFilters::clear(JSONSplitter::FiltersChain& filtersChain)
 {
-    clearFilters(filtersChain);
+    removeFilters(filtersChain);
     clearData();
 }
 
@@ -169,12 +169,12 @@ void TreeFilters::initFilters()
                      });
 }
 
-void TreeFilters::setFilters(JSONSplitter::FiltersChain& filtersChain)
+void TreeFilters::addFilters(JSONSplitter::FiltersChain& filtersChain)
 {
     mFiltersIt = filtersChain.emplace(std::end(filtersChain), &mFilters);
 }
 
-void TreeFilters::clearFilters(JSONSplitter::FiltersChain& filtersChain)
+void TreeFilters::removeFilters(JSONSplitter::FiltersChain& filtersChain)
 {
     if (mFiltersIt.has_value())
     {
