@@ -25033,8 +25033,34 @@ void MegaClient::setMegaURL(const std::string& url)
     MEGAURL = url;
 }
 
+/*
+ * The action packets look like:
+ * {"apm":0,"a": [{}, {}...],...}
+ * 1. apm:1, using legacy mode
+ * 2. apm is absent, or its value is not 1, using streaming mode
+ */
+void MegaClient::parsingSwitch()
+{
+    if (!pendingscUserAlerts && pendingsc && !jsonsc.pos && !scStreamingParser.hasStarted() &&
+        *pendingsc->in.c_str() == '{' && pendingsc->contentlength > 7)
+    {
+        std::string_view str = pendingsc->in;
+        LOG_debug << "Parsing switch, action packets: " << str.substr(0, 7);
+        if (str.compare(2, 3, "apm") == 0 && str[7] == '1')
+        {
+            disableStreaming();
+        }
+        else
+        {
+            enableStreaming();
+        }
+    }
+    return;
+}
+
 void MegaClient::handleScChannel()
 {
+    parsingSwitch();
     return isStreamingEnabled() ? handleScInStreaming() : handleScNonStreaming();
 }
 

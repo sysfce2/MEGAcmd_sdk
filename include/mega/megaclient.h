@@ -1791,7 +1791,7 @@ private:
      * After these changes, we can enable the streaming parsing by setting this to true
      * It needs to be changed to false before merging to the develop branch
      */
-    bool mStreamingEnabled = true;
+    bool mStreamingEnabled = false;
 
     // Every time received data from sc channel, set this to true
     // If some error occurred, set this to false, it will stop current parsing process
@@ -2662,6 +2662,8 @@ public:
     }
 
     void setStreamingContinue();
+
+    void parsingSwitch();
 
     size_t procreqstat();
 
