@@ -25045,7 +25045,6 @@ void MegaClient::parsingSwitch()
         *pendingsc->in.c_str() == '{' && pendingsc->contentlength > 7)
     {
         std::string_view str = pendingsc->in;
-        LOG_debug << "Parsing switch, action packets: " << str.substr(0, 7);
         if (str.compare(2, 3, "apm") == 0 && str[7] == '1')
         {
             disableStreaming();
