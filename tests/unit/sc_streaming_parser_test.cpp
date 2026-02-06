@@ -17,6 +17,7 @@
  */
 
 #include "mega/base64.h"
+#include "mega/db/sqlite.h"
 #include "mega/megaapp.h"
 #include "mega/megaclient.h"
 #include "mega/sc_streaming_parser.h"
@@ -45,6 +46,40 @@ protected:
         scStreamingParser.reset();
         client.reset();
         app.reset();
+    }
+
+    std::shared_ptr<Node> initNodes()
+    {
+        client->dbaccess = new SqliteDbAccess(LocalPath::fromAbsolutePath("."));
+        client->sid =
+            "AWA5YAbtb4JO-y2zWxmKZpSe5-6XM7CTEkA-3Nv7J4byQUpOazdfSC1ZUFlS-kah76gPKUEkTF9g7MeE";
+        client->opensctable();
+
+        // Create root node
+        const std::string rootNodeHandleString = "Ll5VkSJZ";
+        byte buf[8] = {0};
+        Base64::atob(rootNodeHandleString.c_str(), buf, MegaClient::NODEHANDLE);
+        const handle rootNodeHandle = MemAccess::get<handle>((const char*)buf);
+        std::shared_ptr<Node> rootNode = addNode(ROOTNODE, rootNodeHandle);
+
+        // Create vault node and rubbish node
+        addNode(VAULTNODE, 1);
+        addNode(RUBBISHNODE, 2);
+
+        return rootNode;
+    }
+
+    std::shared_ptr<Node> addNode(nodetype_t nodeType, handle nodeHandle)
+    {
+        auto& nodeRef =
+            mt::makeNode(*client, nodeType, mega::NodeHandle().set6byte(nodeHandle), nullptr);
+        std::shared_ptr<Node> node(&nodeRef);
+
+        NodeManager::MissingParentNodes missingParentNodes;
+
+        client->mNodeManager.addNode(node, false, false, missingParentNodes);
+
+        return node;
     }
 
     std::shared_ptr<MegaApp> app;
@@ -264,4 +299,137 @@ TEST_F(ScStreamingParserTest, ProcessAndPause)
                         "P-LLOv0J3u0");
 }
 
+TEST_F(ScStreamingParserTest, ProcessPacketTreeByMove)
+{
+    initNodes();
+
+    std::string jsonCreate =
+        R"({"a":[{"a":"t","st":"!G(<Cq+","t":{"f":[{"h":"i4om2BrJ","t":1,"a":"k8mDAq0-TfskLMyMqcxssQ","k":"vN8A0kvxmC0:cXtlV5RG0QHpBxl-sZWQxA","p":"Ll5VkSJZ","ts":1770364711,"u":"vN8A0kvxmC0","i":0}]},"ou":"vN8A0kvxmC0"}, {"a":"t","st":"!G(<IS$","t":{"f":[{"h":"HtpQjbba","t":1,"a":"STYGCigAjt9fSXwkPSYxVA","k":"vN8A0kvxmC0:3BrxInvwc6gysUP-NmZ8Fg","p":"Ll5VkSJZ","ts":1770364718,"u":"vN8A0kvxmC0","i":0}]},"ou":"vN8A0kvxmC0"}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"JcnE8wc8Xz0"})";
+    std::string jsonMove =
+        R"({"a":[{"a":"d","i":"fbtekrfnlb","st":"!G(<L_j","n":"i4om2BrJ","m":1,"ou":"vN8A0kvxmC0"},{"a":"t","i":"fbtekrfnlb","t":{"f":[{"h":"i4om2BrJ","p":"HtpQjbba","u":"vN8A0kvxmC0","t":1,"a":"k8mDAq0-TfskLMyMqcxssQ","k":"vN8A0kvxmC0:cXtlV5RG0QHpBxl-sZWQxA","ts":1770364711}],"u":[{"u":"vN8A0kvxmC0","m":"jye+test3@mega.co.nz","m2":["jye+test3@mega.co.nz"],"pubk":"CADLwMeFsNUFHY5vIHrDF73XMk6lZvRPQlhh67NGgg8WdiZF7vtM4HrCoftYvQEFLM-JF498dEFLNo9f76KydgWSdl_IEFT4KpnuexvJpfwI0eyJRzU1Wt5wegWJw9WPEKxpHGP91VllLPWB31X2FH48angXw9Mf_3nyjNh-q83tMEbT5XEWuL3KqiMdP80XeqJk3TOuCcaSmq5tzj84rzc1sNnsoNkgYPYuGjOqzA8VzURVU6Tp7BV2eJm0x68dCwoJMHiZVNor1fz0I-iB1Vj2Hurr1NmIGLP9AEJOSKE1iwBSmseTOci3KaLcMrwy1rQMx8r9y-KV5eBnt7kPRSCdACAAAAEB","+puCu255":"dLFE7BT0zCf3Q2f0EXVGRUZRtVuY0J_TPZVMkhAI3Hs","+puEd255":"owpFu55NPN4Y93GX8-iDVcbmktEvd-LcYtgMJUILLxU","+sigCu255":"AAAAAGj5nvcOQZQogXSCNe7RkRLP21nkWcr3D3zx2zY0xC0BqY5_Ny_O1JMaN95YtbkO8dgcYFGiHaW1CWnu9njDcGtnKm8A","+sigPubk":"AAAAAGj5nvgwEi2YXMbNhHdsV1IDYs62RzF1p60M4PkVxXx68HGqF7nBQSg69KUbh_yydf36nneGFMm-7UnKr_yZyFei2wsD"}]},"ou":"vN8A0kvxmC0"}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"YydQMr-woLo"})";
+
+    scStreamingParser->init();
+
+    // Create 2 folder
+    testFinishedProcess(scStreamingParser,
+                        *client.get(),
+                        jsonCreate,
+                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
+                        "JcnE8wc8Xz0");
+
+    // Clear for next process
+    scStreamingParser->clear();
+
+    // Move one folder to another
+    testFinishedProcess(scStreamingParser,
+                        *client.get(),
+                        jsonMove,
+                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
+                        "YydQMr-woLo");
+}
+
+TEST_F(ScStreamingParserTest, ProcessPacketTreeByPutNewVersion)
+{
+    initNodes();
+
+    std::string jsonCreate =
+        R"({"a":[{"a":"t","st":"!G(P`#}","t":{"f":[{"h":"r14EgLRY","t":0,"a":"ZLzvJzDefwAGc8lePmEWhU0fO8ET129XDWyA92FcyDw49VI1I-Zi5oB0Fi7lsCo7T4qjpMqT7EfPpgPNs0P6Fw","k":"vN8A0kvxmC0:ypiDHHhWkrbulm5UUMFy3gODiHsoBIZ37wEbzSSQZGU","p":"Ll5VkSJZ","ts":1770366829,"u":"vN8A0kvxmC0","s":0,"i":0}]},"ou":"vN8A0kvxmC0"}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"lUNj6w_irSk"})";
+    std::string jsonCreateVer =
+        R"({"a":[{"a":"d","st":"!G(Utm1","n":"r14EgLRY","m":1,"v":1,"ou":"vN8A0kvxmC0"},{"a":"t","st":"!G(Utm1","t":{"f":[{"h":"G0wgRQhS","t":0,"a":"PzbbN2J1r_-j_rAq5raGC4SHahy1FZH11tPQbW6SszI94wBAL0uyWgiDtc4zvXThFHjQAlSvirhem-RYH6piKA","k":"vN8A0kvxmC0:vf0AQehM8yISzlRdHhPqZ-icwiL0RZJZJqFoLI6SM0c","p":"Ll5VkSJZ","ts":1770367362,"u":"vN8A0kvxmC0","s":2,"i":0}],"f2":[{"h":"r14EgLRY","p":"G0wgRQhS","u":"vN8A0kvxmC0","t":0,"a":"ZLzvJzDefwAGc8lePmEWhU0fO8ET129XDWyA92FcyDw49VI1I-Zi5oB0Fi7lsCo7T4qjpMqT7EfPpgPNs0P6Fw","k":"vN8A0kvxmC0:ypiDHHhWkrbulm5UUMFy3gODiHsoBIZ37wEbzSSQZGU","s":0,"ts":1770366829}]},"ou":"vN8A0kvxmC0"}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"a7JBKiUvv5Y"})";
+
+    scStreamingParser->init();
+
+    // Create a file
+    testFinishedProcess(scStreamingParser,
+                        *client.get(),
+                        jsonCreate,
+                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
+                        "lUNj6w_irSk");
+
+    // Clear for next process
+    scStreamingParser->clear();
+
+    // Create a new version for the file
+    testFinishedProcess(scStreamingParser,
+                        *client.get(),
+                        jsonCreateVer,
+                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
+                        "a7JBKiUvv5Y");
+}
+
+TEST_F(ScStreamingParserTest, ProcessPacketTreeByCmdPutNodes)
+{
+    std::shared_ptr<Node> rootNode = initNodes();
+
+    std::string jsonCreate =
+        R"({"a":[{"a":"t","st":"!G(P`#}","t":{"f":[{"h":"r14EgLRY","t":0,"a":"ZLzvJzDefwAGc8lePmEWhU0fO8ET129XDWyA92FcyDw49VI1I-Zi5oB0Fi7lsCo7T4qjpMqT7EfPpgPNs0P6Fw","k":"vN8A0kvxmC0:ypiDHHhWkrbulm5UUMFy3gODiHsoBIZ37wEbzSSQZGU","p":"Ll5VkSJZ","ts":1770366829,"u":"vN8A0kvxmC0","s":0,"i":0}]},"ou":"vN8A0kvxmC0"}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"lUNj6w_irSk"})";
+    std::string jsonCreateVer =
+        R"({"a":[{"a":"d","st":"!G(Utm1","n":"r14EgLRY","m":1,"v":1,"ou":"vN8A0kvxmC0"},{"a":"t","st":"!G(Utm1","t":{"f":[{"h":"G0wgRQhS","t":0,"a":"PzbbN2J1r_-j_rAq5raGC4SHahy1FZH11tPQbW6SszI94wBAL0uyWgiDtc4zvXThFHjQAlSvirhem-RYH6piKA","k":"vN8A0kvxmC0:vf0AQehM8yISzlRdHhPqZ-icwiL0RZJZJqFoLI6SM0c","p":"Ll5VkSJZ","ts":1770367362,"u":"vN8A0kvxmC0","s":2,"i":0}],"f2":[{"h":"r14EgLRY","p":"G0wgRQhS","u":"vN8A0kvxmC0","t":0,"a":"ZLzvJzDefwAGc8lePmEWhU0fO8ET129XDWyA92FcyDw49VI1I-Zi5oB0Fi7lsCo7T4qjpMqT7EfPpgPNs0P6Fw","k":"vN8A0kvxmC0:ypiDHHhWkrbulm5UUMFy3gODiHsoBIZ37wEbzSSQZGU","s":0,"ts":1770366829}]},"ou":"vN8A0kvxmC0"}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"a7JBKiUvv5Y"})";
+    std::string jsonRes = R"([["!G(Utm1",{"e":[],"fh":["G0wgRQhS:5GXvAZORkho"]}]])";
+
+    scStreamingParser->init();
+
+    // Create a file
+    testFinishedProcess(scStreamingParser,
+                        *client.get(),
+                        jsonCreate,
+                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
+                        "lUNj6w_irSk");
+
+    // Clear command like CommandSendEvent that will impact next process
+    client->reqs.clear();
+
+    // Clear for next process
+    scStreamingParser->clear();
+
+    // Simulate command PutNodes
+    vector<NewNode> dummyNodeList(1);
+    NewNode& dummyNode = dummyNodeList.front();
+    dummyNode.source = NEW_NODE;
+    dummyNode.type = FILENODE;
+    dummyNode.nodehandle = 10;
+    dummyNode.attrstring = std::make_unique<std::string>("{}");
+    dummyNode.nodekey.resize(FILENODEKEYLENGTH);
+    PrnGen rng;
+    rng.genblock(reinterpret_cast<byte*>(dummyNode.nodekey.data()), FILENODEKEYLENGTH);
+
+    byte masterKey[SymmCipher::KEYLENGTH];
+    rng.genblock(masterKey, SymmCipher::KEYLENGTH);
+    client->key.setkey(masterKey);
+
+    client->putnodes(rootNode->nodeHandle(),
+                     VersioningOption::ClaimOldVersion,
+                     std::move(dummyNodeList),
+                     nullptr,
+                     0,
+                     false);
+
+    bool dummy1;
+    string dummy2;
+    client->reqs.serverrequest(dummy1, client.get(), dummy2);
+    client->reqs.serverresponse(std::move(jsonRes), client.get());
+
+    // Create a new version for the file
+    testFinishedProcess(scStreamingParser,
+                        *client.get(),
+                        jsonCreateVer,
+                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
+                        "a7JBKiUvv5Y");
+}
+
+TEST_F(ScStreamingParserTest, ProcessPacketTreeMixOthers)
+{
+    initNodes();
+
+    std::string jsonCreate =
+        R"({"a":[{"a":"t","st":"!G(<Cq+","t":{"f":[{"h":"i4om2BrJ","t":1,"a":"k8mDAq0-TfskLMyMqcxssQ","k":"vN8A0kvxmC0:cXtlV5RG0QHpBxl-sZWQxA","p":"Ll5VkSJZ","ts":1770364711,"u":"vN8A0kvxmC0","i":0}]},"ou":"vN8A0kvxmC0"}, {"a":"s2","st":"!?>Qzzr","n":"hH4SgJJZ","o":"UH4jcqAYP8o","ok":"AAAAAAAAAAAAAAAAAAAAAA","ha":"AAAAAAAAAAAAAAAAAAAAAA","u":"JoPrmG9jv98","r":1,"ts":1761823710,"p":"ShhP2ZnftRQ","op":1}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"JcnE8wc8Xz0"})";
+
+    scStreamingParser->init();
+
+    testFinishedProcess(scStreamingParser,
+                        *client.get(),
+                        jsonCreate,
+                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
+                        "JcnE8wc8Xz0");
+}
 }
