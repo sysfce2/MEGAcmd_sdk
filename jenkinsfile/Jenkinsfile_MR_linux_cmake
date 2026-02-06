@@ -57,7 +57,7 @@ pipeline {
 
     stages {
         stage('Update Gitlab commit status') {
-            agent any
+            agent { label 'ci-macstudio4' }
             steps {
                 updateGitlabCommitStatus(name: 'Build & test linux', state: 'running')
                 script{
