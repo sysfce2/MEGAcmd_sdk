@@ -2663,7 +2663,7 @@ public:
 
     void setStreamingContinue();
 
-    void parsingSwitch();
+    void chooseScParsingMode();
 
     size_t procreqstat();
 

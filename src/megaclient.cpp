@@ -25039,10 +25039,10 @@ void MegaClient::setMegaURL(const std::string& url)
  * 1. apm:1, using legacy mode
  * 2. apm is absent, or its value is not 1, using streaming mode
  */
-void MegaClient::parsingSwitch()
+void MegaClient::chooseScParsingMode()
 {
-    if (!pendingscUserAlerts && pendingsc && !jsonsc.pos && !scStreamingParser.hasStarted() &&
-        *pendingsc->in.c_str() == '{' && pendingsc->contentlength > 7)
+    if (!jsonsc.pos && !scStreamingParser.hasStarted() && *pendingsc->in.c_str() == '{' &&
+        pendingsc->contentlength > 7)
     {
         std::string_view str = pendingsc->in;
         if (str.compare(2, 3, "apm") == 0 && str[7] == '1')
@@ -25059,13 +25059,16 @@ void MegaClient::parsingSwitch()
 
 void MegaClient::handleScChannel()
 {
-    parsingSwitch();
-    return isStreamingEnabled() ? handleScInStreaming() : handleScNonStreaming();
+    if (!pendingscUserAlerts && pendingsc)
+    {
+        chooseScParsingMode();
+        return isStreamingEnabled() ? handleScInStreaming() : handleScNonStreaming();
+    }
 }
 
 void MegaClient::handleScNonStreaming()
 {
-    if (!jsonsc.pos && !pendingscUserAlerts && pendingsc)
+    if (!jsonsc.pos)
     {
 #ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
         if (globalMegaTestHooks.interceptSCRequest)
@@ -25297,64 +25300,61 @@ bool MegaClient::handleScTimeoutInFlightState()
 
 void MegaClient::handleScInStreaming()
 {
-    if (!pendingscUserAlerts && pendingsc)
-    {
 #ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
-        if (globalMegaTestHooks.interceptSCRequest)
-        {
-            globalMegaTestHooks.interceptSCRequest(pendingsc);
-        }
+    if (globalMegaTestHooks.interceptSCRequest)
+    {
+        globalMegaTestHooks.interceptSCRequest(pendingsc);
+    }
 #endif
 
-        switch (static_cast<reqstatus_t>(pendingsc->status))
-        {
-            case REQ_SUCCESS:
-                pendingscTimedOut = false;
+    switch (static_cast<reqstatus_t>(pendingsc->status))
+    {
+        case REQ_SUCCESS:
+            pendingscTimedOut = false;
 
-                if (handleScKeepAliveInSuccessState())
-                {
-                    assert(!scStreamingParser.hasStarted() &&
-                           "Keep-alive packet between actionpacket chunks");
-                    break;
-                }
-
-                if (scStreamingParser.hasStarted() || *pendingsc->in.c_str() == '{')
-                {
-                    // There are two scenarios:
-                    // 1. received one complete JSON message
-                    // 2. recevied the last chunk of the JSON message
-                    setStreamingContinue();
-                    break;
-                }
-                else
-                {
-                    handleScErrorInSuccessState();
-                }
-
-                [[fallthrough]];
-            case REQ_FAILURE:
-                handleScInFailureState();
+            if (handleScKeepAliveInSuccessState())
+            {
+                assert(!scStreamingParser.hasStarted() &&
+                       "Keep-alive packet between actionpacket chunks");
                 break;
+            }
 
-            case REQ_INFLIGHT:
-                if (handleScTimeoutInFlightState())
-                {
-                    clearStreamingParser();
-                }
-                else
-                {
-                    // This indicates there's new chunk of data received
-                    if (pendingsc->bufpos > pendingsc->notifiedbufpos)
-                    {
-                        mStreamingContinue = true;
-                        pendingsc->notifiedbufpos = pendingsc->bufpos;
-                    }
-                }
+            if (scStreamingParser.hasStarted() || *pendingsc->in.c_str() == '{')
+            {
+                // There are two scenarios:
+                // 1. received one complete JSON message
+                // 2. recevied the last chunk of the JSON message
+                setStreamingContinue();
+                break;
+            }
+            else
+            {
+                handleScErrorInSuccessState();
+            }
 
-                break;
-            default:
-                break;
-        }
+            [[fallthrough]];
+        case REQ_FAILURE:
+            handleScInFailureState();
+            break;
+
+        case REQ_INFLIGHT:
+            if (handleScTimeoutInFlightState())
+            {
+                clearStreamingParser();
+            }
+            else
+            {
+                // This indicates there's new chunk of data received
+                if (pendingsc->bufpos > pendingsc->notifiedbufpos)
+                {
+                    mStreamingContinue = true;
+                    pendingsc->notifiedbufpos = pendingsc->bufpos;
+                }
+            }
+
+            break;
+        default:
+            break;
     }
     processScMessageInStreaming();
     return;
