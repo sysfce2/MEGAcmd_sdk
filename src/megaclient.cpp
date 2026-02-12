@@ -25041,8 +25041,14 @@ void MegaClient::setMegaURL(const std::string& url)
  */
 void MegaClient::chooseScParsingMode()
 {
-    if (!jsonsc.pos && !scStreamingParser.hasStarted() && *pendingsc->in.c_str() == '{' &&
-        pendingsc->contentlength > 7)
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+    if (globalMegaTestHooks.interceptSCRequest)
+    {
+        globalMegaTestHooks.interceptSCRequest(pendingsc);
+    }
+#endif
+
+    if (*pendingsc->in.c_str() == '{' && pendingsc->contentlength > 7)
     {
         std::string_view str = pendingsc->in;
         if (str.compare(2, 3, "apm") == 0 && str[7] == '1')
@@ -25061,7 +25067,11 @@ void MegaClient::handleScChannel()
 {
     if (!pendingscUserAlerts && pendingsc)
     {
-        chooseScParsingMode();
+        if (!jsonsc.pos && !scStreamingParser.hasStarted())
+        {
+            chooseScParsingMode();
+        }
+
         return isStreamingEnabled() ? handleScInStreaming() : handleScNonStreaming();
     }
 }
@@ -25070,13 +25080,6 @@ void MegaClient::handleScNonStreaming()
 {
     if (!jsonsc.pos)
     {
-#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
-        if (globalMegaTestHooks.interceptSCRequest)
-        {
-            globalMegaTestHooks.interceptSCRequest(pendingsc);
-        }
-#endif
-
         switch (static_cast<reqstatus_t>(pendingsc->status))
         {
             case REQ_SUCCESS:
@@ -25300,13 +25303,6 @@ bool MegaClient::handleScTimeoutInFlightState()
 
 void MegaClient::handleScInStreaming()
 {
-#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
-    if (globalMegaTestHooks.interceptSCRequest)
-    {
-        globalMegaTestHooks.interceptSCRequest(pendingsc);
-    }
-#endif
-
     switch (static_cast<reqstatus_t>(pendingsc->status))
     {
         case REQ_SUCCESS:
