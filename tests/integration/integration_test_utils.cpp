@@ -2,7 +2,9 @@
 
 #include "gtest_common.h"
 #include "integration/mock_listeners.h"
+#include "mega/http.h"
 #include "mega/logging.h"
+#include "mega/testhooks.h"
 #include "megautils.h"
 #include "sdk_test_utils.h"
 
@@ -496,4 +498,30 @@ handle createCreditCardNode(::mega::MegaApi* megaApi,
         << "CreditCard node not properly generated. Name: " << name;
     return newPwdNodeHandle;
 }
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+void setScParserMode(bool isStreamingMode)
+{
+    globalMegaTestHooks.interceptSCRequest =
+        [isStreamingMode](std::unique_ptr<HttpReq>& pendingScRequest)
+    {
+        if (!pendingScRequest || pendingScRequest->in.empty())
+        {
+            return;
+        }
+
+        if (pendingScRequest->in.front() == '{')
+        {
+            if (isStreamingMode)
+            {
+                pendingScRequest->in.insert(1, "\"apm\":0,");
+            }
+            else
+            {
+                pendingScRequest->in.insert(1, "\"apm\":1,");
+            }
+        }
+    };
+}
+#endif
 }

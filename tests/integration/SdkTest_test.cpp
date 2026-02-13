@@ -3213,6 +3213,18 @@ auto importNode(MegaApi& client, const std::string& link, const MegaNode& parent
     return makeUniqueFrom(node);
 }
 
+/**
+ * Action Packet streaming and non-streaming parsing modes will coexist for some time. To ensure
+ * both modes function correctly, test cases run in streaming mode by default. The test cases listed
+ * below execute in non-streaming mode and cover the majority of action packet processing scenarios.
+ * - SdkTest.SdkTestTransfers
+ * - SdkTest.SdkTestContacts
+ * - SdkTest.SdkTestShares2
+ * - SdkTest.SdkTestPublicChat
+ * - SdkTest.SdkTestSetsAndElementsPublicLink
+ * - SdkTest.SdkTestGiveRemoveChatAccess
+ */
+
 ///////////////////////////__ Tests using SdkTest __//////////////////////////////////
 /**
  * @brief TEST_F SdkTestCreateEphmeralPlusPlusAccount
@@ -4333,6 +4345,10 @@ TEST_F(SdkTestDownload, ConflictFileExistingName)
 TEST_F(SdkTest, SdkTestTransfers)
 {
     LOG_info << "___TEST Transfers___";
+
+    // Run in action packetet non-streaming parsing mode
+    sdk_test::setScParserMode(false);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
     LOG_info << cwd();
 
@@ -4714,6 +4730,10 @@ TEST_F(SdkTest, SdkTestUndelete)
 TEST_F(SdkTest, SdkTestContacts)
 {
     LOG_info << "___TEST Contacts___";
+
+    // Run in action packetet non-streaming parsing mode
+    sdk_test::setScParserMode(false);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
 
     ASSERT_TRUE(getFileFromArtifactory("test-data/" + AVATARSRC, AVATARSRC));
@@ -5692,6 +5712,9 @@ void SdkTestShares::createNodeTrees()
  */
 TEST_F(SdkTest, SdkTestShares2)
 {
+    // Run in action packetet non-streaming parsing mode
+    sdk_test::setScParserMode(false);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
 
     // --- Create some nodes to share ---
@@ -8089,6 +8112,8 @@ TEST_F(SdkTest, SdkTestChat)
 TEST_F(SdkTest, SdkTestPublicChat)
 {
     CASE_info << "started";
+    // Run in action packetet non-streaming parsing mode
+    sdk_test::setScParserMode(false);
     testChat(true);
     CASE_info << "finished";
 }
@@ -16424,6 +16449,9 @@ TEST_F(SdkTest, SdkTestSetsAndElementsPublicLink)
     // U1: Sync fetch public Set on non-exported Set (using previously valid link), nullptr expected
     // U1: Remove all Sets
 
+    // Run in action packetet non-streaming parsing mode
+    sdk_test::setScParserMode(false);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
 
     // Use another connection with the same credentials as U1
@@ -21134,6 +21162,8 @@ TEST_F(SdkTest, SetGetVisibleTermsOfService)
 TEST_F(SdkTest, SdkTestGiveRemoveChatAccess)
 {
     CASE_info << "started";
+    // Run in action packetet non-streaming parsing mode
+    sdk_test::setScParserMode(false);
     testGiveRemoveChatAccess(false);
     CASE_info << "finished";
 }
