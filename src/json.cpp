@@ -1146,18 +1146,6 @@ m_off_t JSONSplitter::processChunk(const std::map<string, FilterCallback>* filte
 }
 
 m_off_t JSONSplitter::processChunk(const FiltersChain& filtersChain, const char* data)
-{
-    FiltersChain chain;
-
-    if (filters)
-    {
-        chain.emplace_back(filters);
-    }
-
-    return processChunk(chain, data);
-}
-
-m_off_t JSONSplitter::processChunk(const FiltersChain& filtersChain, const char* data)
 
 {
     if (hasFailed() || hasFinished())
