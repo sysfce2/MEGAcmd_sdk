@@ -5545,7 +5545,7 @@ bool MegaClient::sc_procActionPacket(JSON& json, std::shared_ptr<Node>& lastAPDe
                                      !memcmp(json.pos + 5, sessionid, sizeof sessionid) &&
                                      json.pos[5 + sizeof sessionid] == '"';
 
-            sc_procActionPacketWithoutCommonTags(json, name, isSelfOriginating, lastAPDeletedNode);
+            lastAPDeletedNode = sc_procActionPacketWithoutCommonTags(json, name, isSelfOriginating);
         }
         else
         {
@@ -5566,12 +5566,12 @@ void MegaClient::sc_updateStats()
     }
 }
 
-void MegaClient::sc_procActionPacketWithoutCommonTags(JSON& json,
-                                                      nameid name,
-                                                      bool isSelfOriginating,
-                                                      std::shared_ptr<Node>& lastAPDeletedNode)
+std::shared_ptr<Node> MegaClient::sc_procActionPacketWithoutCommonTags(JSON& json,
+                                                                       nameid name,
+                                                                       bool isSelfOriginating)
 {
     bool moveOperation = false; // true if "d" packet has "m":1
+    std::shared_ptr<Node> lastAPDeletedNode;
 
     // only process server-client request if not marked as
     // self-originating ("i" marker element guaranteed to be following
@@ -5747,6 +5747,8 @@ void MegaClient::sc_procActionPacketWithoutCommonTags(JSON& json,
     {
         lastAPDeletedNode.reset();
     }
+
+    return lastAPDeletedNode;
 }
 
 size_t MegaClient::procreqstat()

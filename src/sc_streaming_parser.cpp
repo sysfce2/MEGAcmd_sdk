@@ -123,10 +123,10 @@ void ScStreamingParser::init()
                          else
                          {
                              checkActionPacket();
-                             mClient.sc_procActionPacketWithoutCommonTags(*json,
-                                                                          mActionName,
-                                                                          mIsSelfOriginating,
-                                                                          mLastAPDeletedNode);
+                             mLastAPDeletedNode =
+                                 mClient.sc_procActionPacketWithoutCommonTags(*json,
+                                                                              mActionName,
+                                                                              mIsSelfOriginating);
                          }
 
                          clearActionPacketData();

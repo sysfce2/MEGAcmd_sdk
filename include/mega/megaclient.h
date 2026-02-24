@@ -1906,10 +1906,9 @@ public:
     bool sc_procActionPacket(JSON& json, std::shared_ptr<Node>& lastAPDeletedNode);
     void sc_updateStats();
     // process an action packet excluding a, i and st tags
-    void sc_procActionPacketWithoutCommonTags(JSON& json,
-                                              nameid name,
-                                              bool isSelfOriginating,
-                                              std::shared_ptr<Node>& lastAPDeletedNode);
+    std::shared_ptr<Node> sc_procActionPacketWithoutCommonTags(JSON& json,
+                                                               nameid name,
+                                                               bool isSelfOriginating);
     // evaluates if the sequence tag matches
     bool sc_checkSequenceTag(const string& tag);
     // check if it is ok to process the current action packet
