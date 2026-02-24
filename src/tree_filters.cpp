@@ -76,19 +76,10 @@ void TreeFilters::initFilters()
     mFilters.emplace("{[a{{t[f{",
                      [this](JSON* json)
                      {
-                         execPreAction();
+                         execPreActionOnce();
+                         getPutNodesCmdOnce();
 
-                         if (mFirstNode)
-                         {
-                             mFirstNode = false;
-                             mPutNodesCmd = dynamic_cast<CommandPutNodes*>(
-                                 mClient.reqs.getCurrentCommand(mClient.mCurrentSeqtagSeen));
-
-                             if (mPutNodesCmd)
-                             {
-                                 mPutNodesCmd->emptyResponse = false;
-                             }
-                         }
+                         mHasAnyNode = true;
 
                          readNode(json);
                          return JSONSplitter::ResultFromBool(json->leaveobject());
@@ -98,19 +89,12 @@ void TreeFilters::initFilters()
     mFilters.emplace("{[a{{t[f",
                      [this](JSON* json)
                      {
-                         execPreAction();
+                         execPreActionOnce();
+                         getPutNodesCmdOnce();
 
-                         if (mFirstNode)
+                         if (mPutNodesCmd)
                          {
-                             mFirstNode = false;
-                             mPutNodesCmd = dynamic_cast<CommandPutNodes*>(
-                                 mClient.reqs.getCurrentCommand(mClient.mCurrentSeqtagSeen));
-
-                             // 'f' is empty
-                             if (mPutNodesCmd)
-                             {
-                                 mPutNodesCmd->emptyResponse = true;
-                             }
+                             mPutNodesCmd->emptyResponse = mHasAnyNode;
                          }
 
                          postReadNodes();
@@ -123,14 +107,8 @@ void TreeFilters::initFilters()
     mFilters.emplace("{[a{{t[f2{",
                      [this](JSON* json)
                      {
-                         execPreAction();
-
-                         if (mFirstNode)
-                         {
-                             mFirstNode = false;
-                             mPutNodesCmd = dynamic_cast<CommandPutNodes*>(
-                                 mClient.reqs.getCurrentCommand(mClient.mCurrentSeqtagSeen));
-                         }
+                         execPreActionOnce();
+                         getPutNodesCmdOnce();
 
                          readNode(json);
                          return JSONSplitter::ResultFromBool(json->leaveobject());
@@ -140,7 +118,7 @@ void TreeFilters::initFilters()
     mFilters.emplace("{[a{{t[f2",
                      [this](JSON* json)
                      {
-                         execPreAction();
+                         execPreActionOnce();
                          postReadNodes();
 
                          json->enterarray();
@@ -151,7 +129,7 @@ void TreeFilters::initFilters()
     mFilters.emplace("{[a{{t[u{",
                      [this](JSON* json)
                      {
-                         execPreAction();
+                         execPreActionOnce();
                          readUser(json);
                          return JSONSplitter::ResultFromBool(json->leaveobject());
                      });
@@ -160,7 +138,7 @@ void TreeFilters::initFilters()
     mFilters.emplace("{[a{{t[u",
                      [this](JSON* json)
                      {
-                         execPreAction();
+                         execPreActionOnce();
                          clearUserListData();
 
                          json->enterarray();
@@ -170,7 +148,7 @@ void TreeFilters::initFilters()
     mFilters.emplace("{[a{\"ou",
                      [this](JSON* json)
                      {
-                         execPreAction();
+                         execPreActionOnce();
                          mOriginatingUser = json->gethandle(MegaClient::USERHANDLE);
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
@@ -190,12 +168,22 @@ void TreeFilters::removeFilters(JSONSplitter::FiltersChain& filtersChain)
     }
 }
 
-void TreeFilters::execPreAction()
+void TreeFilters::execPreActionOnce()
 {
     if (mPreAction)
     {
         mPreAction();
         mPreAction = nullptr;
+    }
+}
+
+void TreeFilters::getPutNodesCmdOnce()
+{
+    if (mFirstNode)
+    {
+        mFirstNode = false;
+        mPutNodesCmd = dynamic_cast<CommandPutNodes*>(
+            mClient.reqs.getCurrentCommand(mClient.mCurrentSeqtagSeen));
     }
 }
 
@@ -267,6 +255,7 @@ void TreeFilters::clearNodeListData()
 {
     mFirstNode = true;
     mPutNodesCmd = nullptr;
+    mHasAnyNode = false;
     mPreviousHandleForAlert = UNDEF;
     mMissingParentNodes.clear();
     mNodeError = false;

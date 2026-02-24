@@ -46,6 +46,7 @@ private:
     // For node list
     bool mFirstNode;
     CommandPutNodes* mPutNodesCmd;
+    bool mHasAnyNode;
     handle mPreviousHandleForAlert;
     NodeManager::MissingParentNodes mMissingParentNodes;
     bool mNodeError;
@@ -60,7 +61,8 @@ private:
     void addFilters(JSONSplitter::FiltersChain& filtersChain);
     void removeFilters(JSONSplitter::FiltersChain& filtersChain);
 
-    void execPreAction();
+    void execPreActionOnce();
+    void getPutNodesCmdOnce();
     void readNode(JSON* json);
     void postReadNodes();
     void readUser(JSON* json);
