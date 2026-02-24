@@ -361,26 +361,13 @@ TEST_F(ScStreamingParserTest, ProcessPacketTreeByCmdPutNodes)
 {
     std::shared_ptr<Node> rootNode = initNodes();
 
+    std::string jsonRes = R"([["!G(P`#}",{"e":[],"fh":["G0wgRQhS:5GXvAZORkho"]}]])";
     std::string jsonCreate =
         R"({"a":[{"a":"t","st":"!G(P`#}","t":{"f":[{"h":"r14EgLRY","t":0,"a":"ZLzvJzDefwAGc8lePmEWhU0fO8ET129XDWyA92FcyDw49VI1I-Zi5oB0Fi7lsCo7T4qjpMqT7EfPpgPNs0P6Fw","k":"vN8A0kvxmC0:ypiDHHhWkrbulm5UUMFy3gODiHsoBIZ37wEbzSSQZGU","p":"Ll5VkSJZ","ts":1770366829,"u":"vN8A0kvxmC0","s":0,"i":0}]},"ou":"vN8A0kvxmC0"}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"lUNj6w_irSk"})";
-    std::string jsonCreateVer =
-        R"({"a":[{"a":"d","st":"!G(Utm1","n":"r14EgLRY","m":1,"v":1,"ou":"vN8A0kvxmC0"},{"a":"t","st":"!G(Utm1","t":{"f":[{"h":"G0wgRQhS","t":0,"a":"PzbbN2J1r_-j_rAq5raGC4SHahy1FZH11tPQbW6SszI94wBAL0uyWgiDtc4zvXThFHjQAlSvirhem-RYH6piKA","k":"vN8A0kvxmC0:vf0AQehM8yISzlRdHhPqZ-icwiL0RZJZJqFoLI6SM0c","p":"Ll5VkSJZ","ts":1770367362,"u":"vN8A0kvxmC0","s":2,"i":0}],"f2":[{"h":"r14EgLRY","p":"G0wgRQhS","u":"vN8A0kvxmC0","t":0,"a":"ZLzvJzDefwAGc8lePmEWhU0fO8ET129XDWyA92FcyDw49VI1I-Zi5oB0Fi7lsCo7T4qjpMqT7EfPpgPNs0P6Fw","k":"vN8A0kvxmC0:ypiDHHhWkrbulm5UUMFy3gODiHsoBIZ37wEbzSSQZGU","s":0,"ts":1770366829}]},"ou":"vN8A0kvxmC0"}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"a7JBKiUvv5Y"})";
-    std::string jsonRes = R"([["!G(Utm1",{"e":[],"fh":["G0wgRQhS:5GXvAZORkho"]}]])";
 
     scStreamingParser->init();
 
-    // Create a file
-    testFinishedProcess(scStreamingParser,
-                        *client.get(),
-                        jsonCreate,
-                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
-                        "lUNj6w_irSk");
-
-    // Clear command like CommandSendEvent that will impact next process
-    client->reqs.clear();
-
-    // Clear for next process
-    scStreamingParser->clear();
+    client->scsn.setScsn(0xFFFFFFFF);
 
     // Simulate command PutNodes
     vector<NewNode> dummyNodeList(1);
@@ -409,12 +396,57 @@ TEST_F(ScStreamingParserTest, ProcessPacketTreeByCmdPutNodes)
     client->reqs.serverrequest(dummy1, client.get(), dummy2);
     client->reqs.serverresponse(std::move(jsonRes), client.get());
 
-    // Create a new version for the file
     testFinishedProcess(scStreamingParser,
                         *client.get(),
-                        jsonCreateVer,
+                        jsonCreate,
                         "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
-                        "a7JBKiUvv5Y");
+                        "lUNj6w_irSk");
+}
+
+TEST_F(ScStreamingParserTest, ProcessPacketTreeByCmdPutNodesFailure)
+{
+    std::shared_ptr<Node> rootNode = initNodes();
+
+    std::string jsonRes = R"([["!G(P`#}",{"e":[-1],"fh":["G0wgRQhS:5GXvAZORkho"]}]])";
+    std::string jsonCreate =
+        R"({"a":[{"a":"t","st":"!G(P`#}","t":{"f":[]},"ou":"vN8A0kvxmC0"}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"lUNj6w_irSk"})";
+
+    scStreamingParser->init();
+
+    client->scsn.setScsn(0xFFFFFFFF);
+
+    // Simulate command PutNodes
+    vector<NewNode> dummyNodeList(1);
+    NewNode& dummyNode = dummyNodeList.front();
+    dummyNode.source = NEW_NODE;
+    dummyNode.type = FILENODE;
+    dummyNode.nodehandle = 10;
+    dummyNode.attrstring = std::make_unique<std::string>("{}");
+    dummyNode.nodekey.resize(FILENODEKEYLENGTH);
+    PrnGen rng;
+    rng.genblock(reinterpret_cast<byte*>(dummyNode.nodekey.data()), FILENODEKEYLENGTH);
+
+    byte masterKey[SymmCipher::KEYLENGTH];
+    rng.genblock(masterKey, SymmCipher::KEYLENGTH);
+    client->key.setkey(masterKey);
+
+    client->putnodes(rootNode->nodeHandle(),
+                     VersioningOption::ClaimOldVersion,
+                     std::move(dummyNodeList),
+                     nullptr,
+                     0,
+                     false);
+
+    bool dummy1;
+    string dummy2;
+    client->reqs.serverrequest(dummy1, client.get(), dummy2);
+    client->reqs.serverresponse(std::move(jsonRes), client.get());
+
+    testFinishedProcess(scStreamingParser,
+                        *client.get(),
+                        jsonCreate,
+                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
+                        "lUNj6w_irSk");
 }
 
 TEST_F(ScStreamingParserTest, ProcessPacketTreeMixOthers)

@@ -100,10 +100,17 @@ void TreeFilters::initFilters()
                      {
                          execPreAction();
 
-                         if (mFirstNode && mPutNodesCmd)
+                         if (mFirstNode)
                          {
+                             mFirstNode = false;
+                             mPutNodesCmd = dynamic_cast<CommandPutNodes*>(
+                                 mClient.reqs.getCurrentCommand(mClient.mCurrentSeqtagSeen));
+
                              // 'f' is empty
-                             mPutNodesCmd->emptyResponse = true;
+                             if (mPutNodesCmd)
+                             {
+                                 mPutNodesCmd->emptyResponse = true;
+                             }
                          }
 
                          postReadNodes();
