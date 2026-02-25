@@ -44,8 +44,7 @@ private:
     const int mNotify = 1;
 
     // For node list
-    bool mFirstNode;
-    CommandPutNodes* mPutNodesCmd;
+    std::optional<CommandPutNodes*> mPutNodesCmd;
     bool mHasAnyNode;
     handle mPreviousHandleForAlert;
     NodeManager::MissingParentNodes mMissingParentNodes;

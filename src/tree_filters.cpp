@@ -92,9 +92,9 @@ void TreeFilters::initFilters()
                          execPreActionOnce();
                          getPutNodesCmdOnce();
 
-                         if (mPutNodesCmd)
+                         if (*mPutNodesCmd)
                          {
-                             mPutNodesCmd->emptyResponse = mHasAnyNode;
+                             (*mPutNodesCmd)->emptyResponse = mHasAnyNode;
                          }
 
                          postReadNodes();
@@ -179,9 +179,8 @@ void TreeFilters::execPreActionOnce()
 
 void TreeFilters::getPutNodesCmdOnce()
 {
-    if (mFirstNode)
+    if (!mPutNodesCmd.has_value())
     {
-        mFirstNode = false;
         mPutNodesCmd = dynamic_cast<CommandPutNodes*>(
             mClient.reqs.getCurrentCommand(mClient.mCurrentSeqtagSeen));
     }
@@ -196,10 +195,10 @@ void TreeFilters::readNode(JSON* json)
 
     int e = mClient.readnode(json,
                              mNotify,
-                             mPutNodesCmd ? mPutNodesCmd->source : PUTNODES_APP,
-                             mPutNodesCmd ? &mPutNodesCmd->nn : nullptr,
-                             mPutNodesCmd ? mPutNodesCmd->tag != 0 : false,
-                             mPutNodesCmd ? true : false,
+                             (*mPutNodesCmd) ? (*mPutNodesCmd)->source : PUTNODES_APP,
+                             (*mPutNodesCmd) ? &(*mPutNodesCmd)->nn : nullptr,
+                             (*mPutNodesCmd) ? (*mPutNodesCmd)->tag != 0 : false,
+                             (*mPutNodesCmd) ? true : false,
                              mMissingParentNodes,
                              mPreviousHandleForAlert,
 #ifdef ENABLE_SYNC
@@ -253,8 +252,7 @@ void TreeFilters::clearData()
 
 void TreeFilters::clearNodeListData()
 {
-    mFirstNode = true;
-    mPutNodesCmd = nullptr;
+    mPutNodesCmd.reset();
     mHasAnyNode = false;
     mPreviousHandleForAlert = UNDEF;
     mMissingParentNodes.clear();
