@@ -94,7 +94,7 @@ void TreeFilters::initFilters()
 
                          if (*mPutNodesCmd)
                          {
-                             (*mPutNodesCmd)->emptyResponse = mHasAnyNode;
+                             (*mPutNodesCmd)->emptyResponse = !mHasAnyNode;
                          }
 
                          postReadNodes();
