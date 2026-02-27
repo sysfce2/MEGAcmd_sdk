@@ -25064,9 +25064,16 @@ void MegaClient::setMegaURL(const std::string& url)
 void MegaClient::chooseScParsingMode()
 {
 #ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+    // Global level
     if (globalMegaTestHooks.interceptSCRequest)
     {
         globalMegaTestHooks.interceptSCRequest(pendingsc);
+    }
+
+    // MegaClient level
+    if (megaTestHooks.interceptSCRequest)
+    {
+        megaTestHooks.interceptSCRequest(pendingsc);
     }
 #endif
 

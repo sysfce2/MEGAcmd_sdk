@@ -499,10 +499,10 @@ handle createCreditCardNode(::mega::MegaApi* megaApi,
     return newPwdNodeHandle;
 }
 
-#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
-void setScParserMode(bool isStreamingMode)
+void setScParserMode(::mega::MegaClient* client, bool isStreamingMode)
 {
-    globalMegaTestHooks.interceptSCRequest =
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+    client->megaTestHooks.interceptSCRequest =
         [isStreamingMode](std::unique_ptr<HttpReq>& pendingScRequest)
     {
         if (!pendingScRequest || pendingScRequest->in.empty())
@@ -522,6 +522,8 @@ void setScParserMode(bool isStreamingMode)
             }
         }
     };
-}
+#else
+    // Do nothing
 #endif
+}
 }

@@ -42,6 +42,7 @@
 #include "setandelement.h"
 #include "sharenodekeys.h"
 #include "sync.h"
+#include "testhooks.h"
 #include "transfer.h"
 #include "transferstats.h"
 #include "treeproc.h"
@@ -3610,6 +3611,10 @@ public:
 
     // FUSE service.
     fuse::Service mFuseService;
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+    MegaTestHooks megaTestHooks;
+#endif
 
 private:
 #ifdef ENABLE_SYNC
