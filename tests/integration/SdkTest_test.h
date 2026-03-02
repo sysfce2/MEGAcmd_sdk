@@ -1444,7 +1444,6 @@ public:
         SC_PARSING_MODE_NON_STREAMING
     };
 
-    void getAccountsForTest(unsigned howMany, ScParsingMode scParsingMode);
     void getAccountsForTest(const unsigned howMany = 1,
                             const bool fetchNodes = true,
                             const int clientType = MegaApi::CLIENT_TYPE_DEFAULT,
