@@ -23594,6 +23594,65 @@ bool KeyManager::sendPendingKey(const handle nodehandle, User* u)
     return false;
 }
 
+void KeyManager::propagateKeysForNestedShares(handle promotedNodeHandle,
+                                              const std::vector<std::string>& newShareeUids)
+{
+    auto promotedOutShareNode = mClient.nodebyhandle(promotedNodeHandle);
+    if (!promotedOutShareNode)
+    {
+        LOG_warn << "Skipping other peers pk upon pending-outshare promotion. Node is missing: "
+                 << toNodeHandle(promotedNodeHandle);
+        return;
+    }
+
+    auto outSharesList = mClient.mNodeManager.getNodesWithOutShares();
+    for (auto& alreadySharedNode: outSharesList)
+    {
+        if (!alreadySharedNode->outshares)
+        {
+            LOG_err << "Already shared node does not have an associated outshare. Handle: "
+                    << toNodeHandle(alreadySharedNode->nodeHandle());
+            continue;
+        }
+
+        // Send the new share key to each higher level sharee
+        // Needed so they can decrypt files from the new sharee in the new low level share
+        if (promotedOutShareNode->isbelow(alreadySharedNode->nodeHandle()))
+        {
+            for (const auto& [_, existingShare]: *alreadySharedNode->outshares)
+            {
+                if (User* existingSharee = existingShare->user;
+                    existingSharee) // Folder links are shared without user.
+                {
+                    LOG_debug << "Sending sharekey of outshare "
+                              << toNodeHandle(promotedOutShareNode->nodehandle)
+                              << " to higher level sharee " << existingSharee->uid;
+                    sendPendingKey(promotedOutShareNode->nodehandle, existingSharee);
+                }
+            }
+        }
+
+        // Send the lower level share keys to each new sharee
+        // Needed so they can decrypt new files from the existing sharees in the existing
+        // low level shares
+        if (alreadySharedNode->isbelow(promotedOutShareNode.get()))
+        {
+            // Only for sharees who we've sent the share key
+            for (const auto& newShareeUID: newShareeUids)
+            {
+                if (User* newShareeUser = mClient.finduser(newShareeUID.c_str(), 0);
+                    newShareeUser) // Folder links are shared without user.
+                {
+                    LOG_debug << "Sending sharekey of lower level outshare "
+                              << toNodeHandle(alreadySharedNode->nodehandle) << " to "
+                              << newShareeUID;
+                    sendPendingKey(alreadySharedNode->nodehandle, newShareeUser);
+                }
+            }
+        }
+    }
+}
+
 bool KeyManager::promotePendingShares()
 {
     bool attributeUpdated = false;
@@ -23620,6 +23679,12 @@ bool KeyManager::promotePendingShares()
                              << " uh: " << toHandle(u->userhandle);
                 }
             }
+        }
+
+        // If the outshare has been promoted, send keys to other interested peers, if any.
+        if (!keysToDelete.empty())
+        {
+            propagateKeysForNestedShares(nodehandle, keysToDelete);
         }
 
         for (const auto& uid : keysToDelete)
