@@ -432,21 +432,17 @@ TEST_P(SdkTestShareNested, UploadFilesInNestedShare)
     ASSERT_NO_FATAL_FAILURE(
         matchTree(sharerFolderBNode->getHandle(), shareeAliceIndex, shareeBobIndex));
 
-    // Enable the piece below after SDK-5743
-    /*
-        LOG_info << logPre << "Logout and login to ensure that all is correct after fetching
-       nodes.";
-        ASSERT_NO_FATAL_FAILURE(reloginAllAccounts(true));
+    LOG_info << logPre << "Logout and login to ensure that all is correct after fetching nodes.";
+    ASSERT_NO_FATAL_FAILURE(reloginAllAccounts(true));
 
-        LOG_info << logPre
-                 << "Check again that the sharer, Alice and Bob can see the same nodes and that
-   " "the tree is decrypted after a fresh fetchnodes.";
-        ASSERT_NO_FATAL_FAILURE(
-            matchTree(sharerFolderANode->getHandle(), sharerIndex, shareeAliceIndex));
-        ASSERT_NO_FATAL_FAILURE(matchTree(sharerFolderBNode->getHandle(), sharerIndex,
-       shareeBobIndex)); ASSERT_NO_FATAL_FAILURE( matchTree(sharerFolderBNode->getHandle(),
-       shareeAliceIndex, shareeBobIndex));
-    */
+    LOG_info << logPre
+             << "Check again that the sharer, Alice and Bob can see the same nodes and that the "
+                "tree is decrypted after a fresh fetchnodes.";
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderANode->getHandle(), sharerIndex, shareeAliceIndex));
+    ASSERT_NO_FATAL_FAILURE(matchTree(sharerFolderBNode->getHandle(), sharerIndex, shareeBobIndex));
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderBNode->getHandle(), shareeBobIndex, shareeAliceIndex));
 }
 
 INSTANTIATE_TEST_SUITE_P(UploadFilesInNestedShare,
