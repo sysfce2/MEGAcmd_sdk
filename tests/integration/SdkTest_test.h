@@ -1437,18 +1437,10 @@ public:
 
     // peform fetchnodes for all test involved accounts sequentially to avoid API locks
     void fetchNodesForAccountsSequentially(const unsigned howMany);
-
-    enum ScParsingMode
-    {
-        SC_PARSING_MODE_STREAMING,
-        SC_PARSING_MODE_NON_STREAMING
-    };
-
     void getAccountsForTest(const unsigned howMany = 1,
                             const bool fetchNodes = true,
                             const int clientType = MegaApi::CLIENT_TYPE_DEFAULT,
-                            const std::string& apiServer = std::string{},
-                            ScParsingMode scParsingMode = SC_PARSING_MODE_STREAMING);
+                            const std::string& apiServer = std::string{});
     void configureTestInstance(unsigned index,
                                const std::string& email,
                                const std::string& pass,
@@ -1530,10 +1522,9 @@ public:
 
     MegaHandle getCommander();
 
-    void testChat(bool isPublicChat, ScParsingMode scParsingMode = SC_PARSING_MODE_STREAMING);
+    void testChat(bool isPublicChat, bool useStreamingMode);
 
-    void testGiveRemoveChatAccess(bool isPublicChat,
-                                  ScParsingMode scParsingMode = SC_PARSING_MODE_STREAMING);
+    void testGiveRemoveChatAccess(bool isPublicChat, bool useStreamingMode);
 #endif
 
     template<typename... requestArgs>

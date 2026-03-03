@@ -150,6 +150,14 @@ std::string megaApiCacheFolder(int index)
     return p;
 }
 
+void setScParserMode(const std::vector<MegaApiTestPointer>& megaApi, bool isStreamingMode)
+{
+    for (auto& api: megaApi)
+    {
+        sdk_test::setScParserMode(api->getClient(), isStreamingMode);
+    }
+}
+
 bool SdkTest::WaitFor(const std::function<bool()>& predicate, unsigned timeoutMs)
 {
     const unsigned sleepMs = 100;
@@ -1068,10 +1076,11 @@ void SdkTest::createChat(bool group, MegaTextChatPeerList* peers, bool isPublicC
         << "Chat creation failed (error: " << mApi[static_cast<size_t>(apiIndex)].lastError << ")";
 }
 
-void SdkTest::testChat(bool isPublicChat, ScParsingMode scParsingMode)
+void SdkTest::testChat(bool isPublicChat, bool useStreamingMode)
 {
-    ASSERT_NO_FATAL_FAILURE(
-        getAccountsForTest(2, true, MegaApi::CLIENT_TYPE_DEFAULT, std::string{}, scParsingMode));
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
+
+    setScParserMode(megaApi, useStreamingMode);
 
     // --- Send a new contact request ---
 
@@ -1354,10 +1363,11 @@ MegaHandle SdkTest::getCommander()
     return handle;
 }
 
-void SdkTest::testGiveRemoveChatAccess(bool isPublicChat, ScParsingMode scParsingMode)
+void SdkTest::testGiveRemoveChatAccess(bool isPublicChat, bool useStreamingMode)
 {
-    ASSERT_NO_FATAL_FAILURE(
-        getAccountsForTest(2, true, MegaApi::CLIENT_TYPE_DEFAULT, std::string{}, scParsingMode));
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
+
+    setScParserMode(megaApi, useStreamingMode);
 
     const unsigned int host = 0;
     const unsigned int guest = 1;
@@ -2260,8 +2270,7 @@ void SdkTest::fetchNodesForAccountsSequentially(const unsigned howMany)
 void SdkTest::getAccountsForTest(const unsigned howMany,
                                  const bool fetchNodes,
                                  const int clientType,
-                                 const std::string& apiServer,
-                                 ScParsingMode scParsingMode)
+                                 const std::string& apiServer)
 {
     const std::string prefix{"SdkTest::getAccountsForTest()"};
     const auto maxAccounts = getEnvVarAccounts().size();
@@ -2283,12 +2292,6 @@ void SdkTest::getAccountsForTest(const unsigned howMany,
         if (!apiServer.empty())
         {
             megaApi[index]->changeApiUrl(apiServer.c_str());
-        }
-
-        if (scParsingMode == SC_PARSING_MODE_NON_STREAMING)
-        {
-            // Run in action packet non-streaming parsing mode
-            sdk_test::setScParserMode(megaApi[index]->getClient(), false);
         }
 
         std::unique_ptr<RequestTracker> tracker;
@@ -3225,14 +3228,22 @@ auto importNode(MegaApi& client, const std::string& link, const MegaNode& parent
 
 /**
  * Action Packet streaming and non-streaming parsing modes will coexist for some time. To ensure
- * both modes function correctly, test cases run in streaming mode by default. The test cases listed
- * below execute in non-streaming mode and cover the majority of action packet processing scenarios.
+ * both modes function correctly, test cases should cover both modes.
+ * Below test cases force to execute in streaming mode.
+ * - SdkTest.SdkTestShares
+ * - SdkTest.SdkTestChat
+ * - SdkTest.SdkTestSetsAndElements
+ * - SdkTest.SdkTestUploads
+ * - SdkTest.SdkTestGiveRemovePublicChatAccess
+ * - SdkTest.SdkTestRemovePublicLinkSet
+ * Below test cases force execute in non-streaming mode.
  * - SdkTest.SdkTestTransfers
  * - SdkTest.SdkTestContacts
  * - SdkTest.SdkTestShares2
  * - SdkTest.SdkTestPublicChat
  * - SdkTest.SdkTestSetsAndElementsPublicLink
  * - SdkTest.SdkTestGiveRemoveChatAccess
+ * Above test cases can cover the majority of action packet processing scenarios.
  */
 
 ///////////////////////////__ Tests using SdkTest __//////////////////////////////////
@@ -4356,12 +4367,11 @@ TEST_F(SdkTest, SdkTestTransfers)
 {
     LOG_info << "___TEST Transfers___";
 
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
+
     // Run in action packet non-streaming parsing mode
-    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1,
-                                               true,
-                                               MegaApi::CLIENT_TYPE_DEFAULT,
-                                               std::string{},
-                                               SC_PARSING_MODE_NON_STREAMING));
+    setScParserMode(megaApi, false);
+
     LOG_info << cwd();
 
     // Make sure our clients are working with pro plans.
@@ -4743,12 +4753,10 @@ TEST_F(SdkTest, SdkTestContacts)
 {
     LOG_info << "___TEST Contacts___";
 
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
+
     // Run in action packet non-streaming parsing mode
-    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2,
-                                               true,
-                                               MegaApi::CLIENT_TYPE_DEFAULT,
-                                               std::string{},
-                                               SC_PARSING_MODE_NON_STREAMING));
+    setScParserMode(megaApi, false);
 
     ASSERT_TRUE(getFileFromArtifactory("test-data/" + AVATARSRC, AVATARSRC));
 
@@ -5726,12 +5734,10 @@ void SdkTestShares::createNodeTrees()
  */
 TEST_F(SdkTest, SdkTestShares2)
 {
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
+
     // Run in action packet non-streaming parsing mode
-    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2,
-                                               true,
-                                               MegaApi::CLIENT_TYPE_DEFAULT,
-                                               std::string{},
-                                               SC_PARSING_MODE_NON_STREAMING));
+    setScParserMode(megaApi, false);
 
     // --- Create some nodes to share ---
     //  |--Shared-folder
@@ -6026,6 +6032,9 @@ TEST_F(SdkTest, SdkTestShares)
 {
     LOG_info << "___TEST Shares___";
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
+
+    // Run in action packet streaming parsing mode
+    setScParserMode(megaApi, true);
 
     // Initialize a test scenario : create some folders/files to share
 
@@ -8121,7 +8130,8 @@ TEST_F(SdkTest, SdkTestConsoleAutocomplete)
 TEST_F(SdkTest, SdkTestChat)
 {
     CASE_info << "started";
-    testChat(false);
+    // Run in action packet streaming parsing mode
+    testChat(false, true);
     CASE_info << "finished";
 }
 
@@ -8129,7 +8139,7 @@ TEST_F(SdkTest, SdkTestPublicChat)
 {
     CASE_info << "started";
     // Run in action packet non-streaming parsing mode
-    testChat(true, SC_PARSING_MODE_NON_STREAMING);
+    testChat(true, false);
     CASE_info << "finished";
 }
 #endif
@@ -16014,6 +16024,9 @@ TEST_F(SdkTest, SdkTestSetsAndElements)
     loginTracker = asyncRequestFetchnodes(static_cast<unsigned>(differentApiIdx));
     ASSERT_EQ(API_OK, loginTracker->waitForResult()) << " Failed to fetch nodes for account " << differentApiIdx;
 
+    // Run in action packet streaming parsing mode
+    setScParserMode(megaApi, true);
+
     // 1. Create Set
     string name = U8("Set name ideograms: 讓我們打破這個"); // "讓我們打破這個"
     differentApiDtls.setUpdated = false;
@@ -16464,12 +16477,7 @@ TEST_F(SdkTest, SdkTestSetsAndElementsPublicLink)
     // U1: Sync fetch public Set on non-exported Set (using previously valid link), nullptr expected
     // U1: Remove all Sets
 
-    // Run in action packet non-streaming parsing mode
-    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2,
-                                               true,
-                                               MegaApi::CLIENT_TYPE_DEFAULT,
-                                               std::string{},
-                                               SC_PARSING_MODE_NON_STREAMING));
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
 
     // Use another connection with the same credentials as U1
     MegaApi* differentApiPtr = nullptr;
@@ -16497,6 +16505,8 @@ TEST_F(SdkTest, SdkTestSetsAndElementsPublicLink)
     loginTracker = asyncRequestFetchnodes(difApiIdx);
     ASSERT_EQ(API_OK, loginTracker->waitForResult()) << " Failed to fetch nodes for account " << difApiIdx;
 
+    // Run in action packet non-streaming parsing mode
+    setScParserMode(megaApi, false);
 
     LOG_debug << "# U1: Create set";
     const string name = U8("qq-001");
@@ -18797,6 +18807,9 @@ TEST_F(SdkTest, SdkTestUploads)
 {
     LOG_info << "___TEST Test Uploads___";
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
+
+    // Run in action packet streaming parsing mode
+    setScParserMode(megaApi, true);
 
     // Make sure our clients are working with pro plans.
     auto accountRestorer = scopedToPro(*megaApi[0]);
@@ -21180,7 +21193,7 @@ TEST_F(SdkTest, SdkTestGiveRemoveChatAccess)
 {
     CASE_info << "started";
     // Run in action packet non-streaming parsing mode
-    testGiveRemoveChatAccess(false, SC_PARSING_MODE_NON_STREAMING);
+    testGiveRemoveChatAccess(false, false);
     CASE_info << "finished";
 }
 
@@ -21190,7 +21203,8 @@ TEST_F(SdkTest, SdkTestGiveRemoveChatAccess)
 TEST_F(SdkTest, SdkTestGiveRemovePublicChatAccess)
 {
     CASE_info << "started";
-    testGiveRemoveChatAccess(true);
+    // Run in action packet streaming parsing mode
+    testGiveRemoveChatAccess(true, true);
     CASE_info << "finished";
 }
 #endif
@@ -22939,6 +22953,9 @@ TEST_F(SdkTest, SdkTestRemovePublicLinkSet)
     megaApi[secondaryClientIdx]->login(email.c_str(), pass.c_str(), loginTracker.get());
     ASSERT_EQ(API_OK, loginTracker->waitForResult()) << " Failed to login to account " << email;
     ASSERT_NO_FATAL_FAILURE(fetchnodes(secondaryClientIdx));
+
+    // Run in action packet streaming parsing mode
+    setScParserMode(megaApi, true);
 
     const MrProper cleanUp(
         [this]()
