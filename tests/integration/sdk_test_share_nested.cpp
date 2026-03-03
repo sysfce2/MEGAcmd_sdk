@@ -412,6 +412,26 @@ TEST_P(SdkTestShareNested, UploadFilesInNestedShare)
     ASSERT_NO_FATAL_FAILURE(
         matchTree(sharerFolderBNode->getHandle(), shareeAliceIndex, shareeBobIndex));
 
+    LOG_info << logPre
+             << "Alice puts a file in the nested inshare folder. Check if Bob and the sharer can "
+                "see the node.";
+    auto shareeAliceFolderBNode = std::unique_ptr<MegaNode>{
+        megaApi[shareeAliceIndex]->getNodeByHandle(sharerFolderBNode->getHandle())};
+    ASSERT_TRUE(shareeAliceFolderBNode);
+    MegaHandle fromAliceInFolderBHandle = INVALID_HANDLE;
+    ASSERT_NO_FATAL_FAILURE(createRemoteFileNode(shareeAliceIndex,
+                                                 FileNodeInfo("fromAliceInFolderB").setSize(100),
+                                                 shareeAliceFolderBNode.get(),
+                                                 fromAliceInFolderBHandle,
+                                                 sharerIndex));
+
+    waitForNodeToBeDecrypted(sharerIndex, fromAliceInFolderBHandle);
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderBNode->getHandle(), sharerIndex, shareeAliceIndex));
+    waitForNodeToBeDecrypted(shareeBobIndex, fromAliceInFolderBHandle);
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderBNode->getHandle(), shareeAliceIndex, shareeBobIndex));
+
     // Enable the piece below after SDK-5743
     /*
         LOG_info << logPre << "Logout and login to ensure that all is correct after fetching
