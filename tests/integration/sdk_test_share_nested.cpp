@@ -9,9 +9,18 @@
 
 using namespace sdk_test;
 
-class SdkTestShareNested: public virtual SdkTestShare, public virtual SdkTestNodesSetUp
+class SdkTestShareNested:
+    public virtual SdkTestShare,
+    public virtual SdkTestNodesSetUp,
+    virtual public ::testing::WithParamInterface<int>
 {
 public:
+    enum class ShareOrder : int
+    {
+        Forward,
+        Reverse
+    };
+
     void SetUp() override
     {
         SdkTestShare::SetUp();
@@ -310,11 +319,19 @@ TEST_F(SdkTestShareNested, BasicNestedShares)
 /**
  * @brief Test upload a file in the nested share
  *
- * It test if a file uploaded by a sharee is decryptable, creating a nested share and uploading a
- * file in the inshare of the nested sharee, ensuring that all peers can see their respective files.
+ * It test if files uploaded by the sharees are decryptable, creating a nested share and uploading
+ * files in the inshare of the nested sharee, ensuring that all peers can see their respective
+ * files.
+ *
+ * Test is parametrizable to change the order of the outshare creation. The idea is to ensure
+ * that it works if the nested share is created below an existing share or if a new share is
+ * created above the existing nested share. This ensures that the sharekeys are correctly shared
+ * and the "k" of the nodes are correctly encrypte and decrypted.
  */
-TEST_F(SdkTestShareNested, UploadFileInNestedShare)
+TEST_P(SdkTestShareNested, UploadFilesInNestedShare)
 {
+    const auto shareOrder = static_cast<ShareOrder>(GetParam());
+
     const auto logPre = getLogPrefix();
 
     LOG_info << "Starting body of " << logPre;
@@ -337,14 +354,33 @@ TEST_F(SdkTestShareNested, UploadFileInNestedShare)
     auto sharerFolderBNode = getNodeByPath(string(FOLDER_A) + "/" + FOLDER_B);
     ASSERT_TRUE(sharerFolderANode) << "folder \"folderA\" not found.";
     ASSERT_TRUE(sharerFolderBNode) << "folder \"folderB\" not found.";
-    ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderANode.get(),
-                                            {sharerIndex, true},
-                                            {shareeAliceIndex, true},
-                                            MegaShare::ACCESS_FULL));
-    ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderBNode.get(),
-                                            {sharerIndex, true},
-                                            {shareeBobIndex, true},
-                                            MegaShare::ACCESS_FULL));
+
+    auto shareToAlice = [&]()
+    {
+        ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderANode.get(),
+                                                {sharerIndex, true},
+                                                {shareeAliceIndex, true},
+                                                MegaShare::ACCESS_FULL));
+    };
+    auto shareToBob = [&]()
+    {
+        ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderBNode.get(),
+                                                {sharerIndex, true},
+                                                {shareeBobIndex, true},
+                                                MegaShare::ACCESS_FULL));
+    };
+
+    // Order changed by param to exercise cases of shares avobe and below.
+    if (shareOrder == ShareOrder::Forward)
+    {
+        shareToAlice();
+        shareToBob();
+    }
+    else
+    {
+        shareToBob();
+        shareToAlice();
+    }
 
     LOG_info << logPre
              << "Ensure that the sharer, Alice and Bob can see the same nodes and that the tree is "
@@ -362,6 +398,7 @@ TEST_F(SdkTestShareNested, UploadFileInNestedShare)
         << "Bob puts a file in the inshare folder. Check if Alice and the sharer can see the node.";
     auto shareeBobFolderBNode = std::unique_ptr<MegaNode>{
         megaApi[shareeBobIndex]->getNodeByHandle(sharerFolderBNode->getHandle())};
+    ASSERT_TRUE(shareeBobFolderBNode);
     MegaHandle fromBobInFolderBHandle = INVALID_HANDLE;
     ASSERT_NO_FATAL_FAILURE(createRemoteFileNode(shareeBobIndex,
                                                  FileNodeInfo("fromBobInFolderB").setSize(100),
@@ -391,6 +428,11 @@ TEST_F(SdkTestShareNested, UploadFileInNestedShare)
        shareeAliceIndex, shareeBobIndex));
     */
 }
+
+INSTANTIATE_TEST_SUITE_P(UploadFilesInNestedShare,
+                         SdkTestShareNested,
+                         ::testing::Values(SdkTestShareNested::ShareOrder::Forward,
+                                           SdkTestShareNested::ShareOrder::Reverse));
 
 /**
  * @brief Verify sync state transitions for nested shares.
