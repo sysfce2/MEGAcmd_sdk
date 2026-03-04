@@ -265,6 +265,8 @@ public:
     DirNotify* newdirnotify(LocalNode& root, const LocalPath& rootPath, Waiter* waiter) override;
 #endif
 
+    void escapefsincompatible(string*, FileSystemType fileSystemType) const override;
+
     bool getlocalfstype(const LocalPath& path, FileSystemType& type) const override;
     bool getsname(const LocalPath&, LocalPath&) const override;
     bool renamelocal(const LocalPath&, const LocalPath&, bool = true) override;

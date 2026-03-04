@@ -1065,6 +1065,16 @@ bool WinFileSystemAccess::istransientorexists(DWORD e)
 
 void WinFileSystemAccess::addevents(Waiter*, int) {}
 
+// replace characters that are not allowed in local fs names with a %xx escape sequence
+void WinFileSystemAccess::escapefsincompatible(string* name, FileSystemType fileSystemType) const
+{
+    FileSystemAccess::escapefsincompatible(name, fileSystemType);
+    // Windows APIs cannot store names ending in '.' even when the underlying filesystem might allow
+    // it. Escape trailing dots consistently so sync/transfers can round-trip the original cloud
+    // name via unescapefsincompatible().
+    FileSystemAccess::escapeTrailingDots(name);
+}
+
 // write short name of the last path component to sname
 bool WinFileSystemAccess::getsname(const LocalPath& namePath, LocalPath& snamePath) const
 {

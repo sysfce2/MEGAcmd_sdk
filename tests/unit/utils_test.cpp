@@ -132,6 +132,117 @@ TEST(Filesystem, UnescapesEscapedCharacters)
     ASSERT_STREQ(name.c_str(), "%\\/:?\"<>|*");
 }
 
+TEST(Filesystem, EscapesTrailingDots)
+{
+    using namespace mega;
+
+    FSACCESS_CLASS fsAccess;
+
+    // Trailing-dot escaping is platform-specific.
+    // - On Android (SAF/DocumentFile) and Windows, names ending in '.' are not supported,
+    //   so we escape trailing dots regardless of filesystem type.
+    // - On other platforms, trailing dots are left intact.
+#if defined(__ANDROID__) || defined(WIN32) || defined(_WIN32)
+    for (const auto fsType: {FS_UNKNOWN,
+                             FS_EXT,
+                             FS_F2FS,
+                             FS_XFS,
+                             FS_APFS,
+                             FS_HFS,
+                             FS_FAT32,
+                             FS_EXFAT,
+                             FS_NTFS,
+                             FS_SDCARDFS})
+    {
+        {
+            string name = "file.";
+            fsAccess.escapefsincompatible(&name, fsType);
+            ASSERT_EQ(name, "file%2e") << "fsType=" << fsType;
+        }
+
+        {
+            string name = "file...";
+            fsAccess.escapefsincompatible(&name, fsType);
+            ASSERT_EQ(name, "file%2e%2e%2e") << "fsType=" << fsType;
+        }
+
+        {
+            string name = ".hidden.";
+            fsAccess.escapefsincompatible(&name, fsType);
+            ASSERT_EQ(name, ".hidden%2e") << "fsType=" << fsType;
+        }
+
+        {
+            string name = "file.txt";
+            fsAccess.escapefsincompatible(&name, fsType);
+            ASSERT_EQ(name, "file.txt") << "fsType=" << fsType;
+        }
+
+        {
+            string name = ".";
+            fsAccess.escapefsincompatible(&name, fsType);
+            ASSERT_EQ(name, "%2e") << "fsType=" << fsType;
+        }
+
+        {
+            string name = "..";
+            fsAccess.escapefsincompatible(&name, fsType);
+            ASSERT_EQ(name, "%2e%2e") << "fsType=" << fsType;
+        }
+    }
+#else
+    for (const auto fsType: {FS_UNKNOWN,
+                             FS_EXT,
+                             FS_F2FS,
+                             FS_XFS,
+                             FS_APFS,
+                             FS_HFS,
+                             FS_FAT32,
+                             FS_EXFAT,
+                             FS_NTFS,
+                             FS_SDCARDFS})
+    {
+        string name = "file.";
+        fsAccess.escapefsincompatible(&name, fsType);
+        ASSERT_EQ(name, "file.") << "fsType=" << fsType;
+
+        // Whole-name "." and ".." are still escaped (platform-independent behavior).
+        {
+            string dot = ".";
+            fsAccess.escapefsincompatible(&dot, fsType);
+            ASSERT_EQ(dot, "%2e") << "fsType=" << fsType;
+        }
+        {
+            string dotdot = "..";
+            fsAccess.escapefsincompatible(&dotdot, fsType);
+            ASSERT_EQ(dotdot, "%2e%2e") << "fsType=" << fsType;
+        }
+    }
+#endif
+}
+
+TEST(Filesystem, TrailingDotsRoundTrip)
+{
+    using namespace mega;
+
+    FSACCESS_CLASS fsAccess;
+
+    // Escape then unescape must recover the original cloud name.
+    const std::vector<string> cloudNames = {
+        "file.",
+        "file...",
+        ".hidden.",
+        "file.txt", // unchanged — no trailing dot
+    };
+
+    for (const auto& original: cloudNames)
+    {
+        string name = original;
+        fsAccess.escapefsincompatible(&name, FS_UNKNOWN);
+        fsAccess.unescapefsincompatible(&name);
+        ASSERT_EQ(name, original) << "Round-trip failed for: " << original;
+    }
+}
 
 TEST(CharacterSet, IterateUtf8)
 {

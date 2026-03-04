@@ -712,6 +712,30 @@ bool FileSystemAccess::islocalfscompatible(const int character, const FileSystem
     }
 }
 
+void FileSystemAccess::escapeTrailingDots(string* name)
+{
+    size_t pos = name->size();
+    while (pos > 0 && (*name)[pos - 1] == '.')
+    {
+        --pos;
+    }
+
+    const size_t trailingDots = name->size() - pos;
+    if (trailingDots == 0)
+    {
+        return;
+    }
+
+    string replacement;
+    replacement.reserve(trailingDots * 3);
+    for (size_t j = 0; j < trailingDots; ++j)
+    {
+        replacement += "%2e";
+    }
+
+    name->replace(pos, trailingDots, replacement);
+}
+
 // replace characters that are not allowed in local fs names with a %xx escape sequence
 void FileSystemAccess::escapefsincompatible(string* name, FileSystemType fileSystemType) const
 {

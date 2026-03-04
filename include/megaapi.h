@@ -20695,6 +20695,10 @@ class MegaApi
          * This function escapes (%xx) forbidden characters in the local filesystem if needed.
          * You can revert this operation using MegaApi::unescapeFsIncompatible
          *
+         * Note: On Windows and Android, this function also escapes trailing dots ('.')
+         * (for example: "file." -> "file%2e") to match platform APIs that cannot create
+         * names ending in '.'. This allows sync/transfers to round-trip the original cloud name.
+         *
          * If no dstPath is provided or filesystem type it's not supported this method will
          * escape characters contained in the following list: \/:?\"<>|*
          * Otherwise it will check forbidden characters for local filesystem type
@@ -20716,6 +20720,9 @@ class MegaApi
          * unescape those sequences that once has been unescaped results in any character
          * of the following list: \/:?\"<>|*
          * Otherwise it will unescape those characters forbidden in local filesystem type
+         *
+         * This function also reverts trailing-dot escaping performed by
+         * MegaApi::escapeFsIncompatible on Windows/Android (for example: "file%2e" -> "file.").
          *
          * The input string must be UTF8 encoded. The returned value will be UTF8 too.
          * You take ownership of the returned value. Use delete[] to release the memory.

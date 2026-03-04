@@ -12308,6 +12308,160 @@ TEST_F(SdkTest, UnescapesReservedCharactersOnUpload)
     ASSERT_STREQ(child->getName(), "a/b/c!.txt");
 }
 
+TEST_F(SdkTest, EscapesTrailingDots)
+{
+    // Set up necessary accounts.
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
+
+    MegaApi* api = megaApi[0].get();
+    ASSERT_NE(api, nullptr);
+
+    auto check = [api](const string& input, const string& expectedEscaped)
+    {
+        unique_ptr<char[]> escaped(api->escapeFsIncompatible(input.c_str(), nullptr));
+        ASSERT_NE(escaped.get(), nullptr);
+        ASSERT_STREQ(expectedEscaped.c_str(), escaped.get());
+
+        unique_ptr<char[]> roundTripped(api->unescapeFsIncompatible(escaped.get(), nullptr));
+        ASSERT_NE(roundTripped.get(), nullptr);
+        ASSERT_STREQ(input.c_str(), roundTripped.get());
+    };
+
+    // "." and ".." are always escaped regardless of platform.
+    check(".", "%2e");
+    check("..", "%2e%2e");
+
+#if defined(__ANDROID__) || defined(WIN32) || defined(_WIN32)
+    check("trailing.", "trailing%2e");
+    check("trailing..", "trailing%2e%2e");
+    check("mid.dle.", "mid.dle%2e");
+    check("...", "%2e%2e%2e");
+#else
+    check("trailing.", "trailing.");
+    check("trailing..", "trailing..");
+    check("mid.dle.", "mid.dle.");
+    check("...", "...");
+#endif
+}
+
+TEST_F(SdkTest, SdkTestStartUploadTrailingDotName)
+{
+    LOG_info << "___TEST StartUpload trailing dot name___";
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
+
+    std::unique_ptr<MegaNode> rootnode(megaApi[0]->getRootNode());
+    ASSERT_TRUE(rootnode);
+
+    const std::string fileEscapedName{"srcTrailing%2e"};
+    const std::string cloudFileName{"srcTrailing."};
+
+    const std::string testItem{"trailingDotTransfer"};
+    const fs::path basePath = fs::current_path();
+    const sdk_test::LocalTempDir tempDir(basePath / testItem);
+    const sdk_test::LocalTempFile srcFile(basePath / testItem / fileEscapedName, 1);
+    const std::string srcFilePath = path_u8string(srcFile.getPath());
+
+    // test upload with escaped filename, without providing a new name (SDK should unescape the name
+    // and use it for the node)
+    auto uploadSrcNode = sdk_test::uploadFile(megaApi[0].get(), srcFilePath.c_str());
+    ASSERT_TRUE(uploadSrcNode);
+    ASSERT_STREQ(cloudFileName.c_str(), uploadSrcNode->getName());
+
+    // Use an escaped name override. MegaApiImpl will unescape it, so the cloud node name ends with
+    // '.'.
+    const std::string cloudCustomName{"trailing."};
+    const std::string escapedCustomName{"trailing%2e"};
+
+    // test upload with a new name containing an escaped dot, SDK should unescape the name and use
+    // it for the node
+    auto uploadRenameNode = sdk_test::uploadFile(megaApi[0].get(),
+                                                 srcFilePath.c_str(),
+                                                 rootnode.get(),
+                                                 escapedCustomName.c_str());
+    ASSERT_TRUE(uploadRenameNode);
+    ASSERT_STREQ(cloudCustomName.c_str(), uploadRenameNode->getName());
+}
+
+TEST_F(SdkTest, SdkTestStartDownloadTrailingDotName)
+{
+    LOG_info << "___TEST StartDownload trailing dot name___";
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
+
+    const std::string fileEscapedName{"srcTrailing%2e"};
+    const std::string fileUnescapedName{"srcTrailing."};
+
+    const std::string testItem{"trailingDotTransfer"};
+    const fs::path basePath = fs::current_path();
+    const sdk_test::LocalTempDir tempDir(basePath / testItem);
+    const sdk_test::LocalTempFile srcFile(basePath / testItem / fileEscapedName, 1);
+    const std::string srcFilePath = path_u8string(srcFile.getPath());
+
+    // upload file to the cloud, using an escaped name, so the node in the cloud has a name with a
+    // trailing dot
+    auto uploadSrcNode = sdk_test::uploadFile(megaApi[0].get(), srcFilePath.c_str());
+    ASSERT_TRUE(uploadSrcNode);
+    ASSERT_STREQ(fileUnescapedName.c_str(), uploadSrcNode->getName());
+
+    const fs::path downloadDirPath = basePath / testItem / "download";
+    ASSERT_TRUE(fs::create_directories(downloadDirPath));
+
+    const auto downloadFile = [this](MegaNode* node,
+                                     const fs::path& destinationDir,
+                                     const char* customName,
+                                     const std::string& expectedDownloadFileName)
+    {
+        MegaApi* api = megaApi[0].get();
+        TransferTracker tracker(api);
+
+        std::string targetPath = path_u8string(destinationDir);
+        if (targetPath.empty() || (targetPath.back() != '/' && targetPath.back() != '\\'))
+        {
+            targetPath.append(1, LocalPath::localPathSeparator_utf8);
+        }
+
+        api->startDownload(node,
+                           targetPath.c_str(),
+                           customName /*customName*/,
+                           nullptr /*appData*/,
+                           false /*startFirst*/,
+                           nullptr /*cancelToken*/,
+                           MegaTransfer::COLLISION_CHECK_FINGERPRINT,
+                           MegaTransfer::COLLISION_RESOLUTION_NEW_WITH_N,
+                           false /*undelete*/,
+                           &tracker);
+
+        ASSERT_EQ(tracker.waitForResult(), API_OK)
+            << "Download failed for node: " << node->getName()
+            << " with custom name: " << (customName ? customName : "null");
+
+        const fs::path expectedDownloadedPath = destinationDir / expectedDownloadFileName;
+        ASSERT_TRUE(fs::exists(expectedDownloadedPath))
+            << "Expected downloaded file missing: " << path_u8string(expectedDownloadedPath);
+    };
+
+// download the file using the name with the escaped dot
+#if defined(__ANDROID__) || defined(WIN32) || defined(_WIN32)
+    downloadFile(uploadSrcNode.get(), downloadDirPath, nullptr, fileEscapedName);
+#else
+    downloadFile(uploadSrcNode.get(), downloadDirPath, nullptr, fileUnescapedName);
+#endif
+
+    // download the file using a custom name with an escaped dot
+    const std::string unescapedCustomName{"trailing."};
+    const std::string escapedCustomName{"trailing%2e"};
+#if defined(__ANDROID__) || defined(WIN32) || defined(_WIN32)
+    downloadFile(uploadSrcNode.get(),
+                 downloadDirPath,
+                 unescapedCustomName.c_str(),
+                 escapedCustomName);
+#else
+    downloadFile(uploadSrcNode.get(),
+                 downloadDirPath,
+                 unescapedCustomName.c_str(),
+                 unescapedCustomName);
+#endif
+}
+
 TEST_F(SdkTest, RecursiveUploadWithLogout)
 {
     LOG_info << "___TEST RecursiveUploadWithLogout___";
