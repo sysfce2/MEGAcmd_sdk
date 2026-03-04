@@ -675,3 +675,112 @@ TEST_F(SdkTestShareNested, ShareCount)
     ASSERT_NO_FATAL_FAILURE(reloginAllAccounts());
     ASSERT_NO_FATAL_FAILURE(checkShareCounters());
 }
+
+/**
+ * @brief Upload nodes to inshares after a fresh login.
+ *
+ * It checks if after a fresh login the information from the fetchnodes
+ * and if the SDK behaves correctly and send the needed information for
+ * all the peers.
+ *
+ */
+TEST_F(SdkTestShareNested, FullTreeUploads)
+{
+    const auto logPre = getLogPrefix();
+
+    LOG_info << "Starting body of " << logPre;
+
+    // Make sharer and sharees contacts.
+    ASSERT_NO_FATAL_FAILURE(
+        inviteTestAccount(sharerIndex, shareeAliceIndex, "Sharer inviting Alice"))
+        << "Failure inviting Alice";
+    ASSERT_NO_FATAL_FAILURE(inviteTestAccount(sharerIndex, shareeBobIndex, "Sharer inviting Bob"))
+        << "Failure inviting Bob";
+
+    if (gManualVerification)
+    {
+        ASSERT_NO_FATAL_FAILURE(verifyContactCredentials(sharerIndex, shareeAliceIndex));
+        ASSERT_NO_FATAL_FAILURE(verifyContactCredentials(sharerIndex, shareeBobIndex));
+    }
+
+    LOG_info << logPre << "Share folder \"folderA\" to Alice and subfolder \"folderB\" to Bob";
+    auto sharerFolderANode = getNodeByPath(FOLDER_A);
+    auto sharerFolderBNode = getNodeByPath(string(FOLDER_A) + "/" + FOLDER_B);
+    ASSERT_TRUE(sharerFolderANode) << "folder \"folderA\" not found.";
+    ASSERT_TRUE(sharerFolderBNode) << "folder \"folderB\" not found.";
+    ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderANode.get(),
+                                            {sharerIndex, true},
+                                            {shareeAliceIndex, true},
+                                            MegaShare::ACCESS_FULL));
+    ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderBNode.get(),
+                                            {sharerIndex, true},
+                                            {shareeBobIndex, true},
+                                            MegaShare::ACCESS_FULL));
+
+    LOG_info << logPre
+             << "Ensure that the sharer, Alice and Bob can see the same nodes and that the tree is "
+                "decrypted.";
+    waitForNodeToBeDecrypted(shareeAliceIndex, sharerFolderANode->getHandle());
+    waitForNodeToBeDecrypted(shareeBobIndex, sharerFolderBNode->getHandle());
+
+    LOG_info << logPre << "Logout and login to ensure that all is correct after fetching nodes.";
+    ASSERT_NO_FATAL_FAILURE(reloginAllAccounts(true));
+
+    LOG_info << logPre << "Check that the sharer, Alice and Bob can see the same nodes";
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderANode->getHandle(), sharerIndex, shareeAliceIndex));
+    ASSERT_NO_FATAL_FAILURE(matchTree(sharerFolderBNode->getHandle(), sharerIndex, shareeBobIndex));
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderBNode->getHandle(), shareeAliceIndex, shareeBobIndex));
+
+    LOG_info << logPre << "Bob puts a file in the inshare folder.";
+    auto shareeBobFolderBNode = std::unique_ptr<MegaNode>{
+        megaApi[shareeBobIndex]->getNodeByHandle(sharerFolderBNode->getHandle())};
+    ASSERT_TRUE(shareeBobFolderBNode);
+    MegaHandle fromBobInFolderBHandle = INVALID_HANDLE;
+    ASSERT_NO_FATAL_FAILURE(createRemoteFileNode(shareeBobIndex,
+                                                 FileNodeInfo("fromBobInFolderB").setSize(100),
+                                                 shareeBobFolderBNode.get(),
+                                                 fromBobInFolderBHandle,
+                                                 sharerIndex));
+
+    LOG_info << logPre
+             << "Alice puts a file in the inshare folder and in the nested inshare folder.";
+    auto shareeAliceFolderBNode = std::unique_ptr<MegaNode>{
+        megaApi[shareeAliceIndex]->getNodeByHandle(sharerFolderBNode->getHandle())};
+    ASSERT_TRUE(shareeAliceFolderBNode);
+    MegaHandle fromAliceInFolderBHandle = INVALID_HANDLE;
+    ASSERT_NO_FATAL_FAILURE(createRemoteFileNode(shareeAliceIndex,
+                                                 FileNodeInfo("fromAliceInFolderB").setSize(100),
+                                                 shareeAliceFolderBNode.get(),
+                                                 fromAliceInFolderBHandle,
+                                                 sharerIndex));
+    auto shareeAliceFolderANode = std::unique_ptr<MegaNode>{
+        megaApi[shareeAliceIndex]->getNodeByHandle(sharerFolderANode->getHandle())};
+    ASSERT_TRUE(shareeAliceFolderANode);
+    MegaHandle fromAliceInFolderAHandle = INVALID_HANDLE;
+    ASSERT_NO_FATAL_FAILURE(createRemoteFileNode(shareeAliceIndex,
+                                                 FileNodeInfo("fromAliceInFolderA").setSize(100),
+                                                 shareeAliceFolderANode.get(),
+                                                 fromAliceInFolderAHandle,
+                                                 sharerIndex));
+    LOG_info << logPre
+             << "Ensure that the sharer, Alice and Bob can see the same nodes and that the tree is "
+                "decrypted.";
+
+    // Wait for Bob file
+    waitForNodeToBeDecrypted(sharerIndex, fromBobInFolderBHandle);
+    waitForNodeToBeDecrypted(shareeAliceIndex, fromBobInFolderBHandle);
+
+    // Wait for Alice files
+    waitForNodeToBeDecrypted(sharerIndex, fromAliceInFolderBHandle);
+    waitForNodeToBeDecrypted(shareeBobIndex, fromAliceInFolderBHandle);
+    waitForNodeToBeDecrypted(sharerIndex, fromAliceInFolderAHandle);
+
+    // Check the complete tree
+    ASSERT_NO_FATAL_FAILURE(matchTree(sharerFolderBNode->getHandle(), sharerIndex, shareeBobIndex));
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderBNode->getHandle(), shareeAliceIndex, shareeBobIndex));
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderANode->getHandle(), sharerIndex, shareeAliceIndex));
+}

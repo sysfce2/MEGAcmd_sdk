@@ -10797,6 +10797,25 @@ int MegaClient::readnode(JSON* j,
                         mNewKeyRepository[NodeHandle().set6byte(h)] = std::move(buf);
                     }
                 }
+                else if (t == FOLDERNODE && !notify && !loggedIntoFolder() && !ISUNDEF(u) &&
+                         u != me) // 'notify' is false only while processing fetchnodes command.
+                {
+                    // Foreign folder node which is not an inshare. We may still have a sharekey for
+                    // it (nested share). If set, new pushed nodes can take it into acount and
+                    // encrypt the node key for it.
+                    auto shareKey = mKeyManager.getShareKey(h);
+                    if (shareKey.size() && mKeyManager.isShareKeyTrusted(h))
+                    {
+                        // So the node has the sharekey but without being an inshare (no user data)
+                        newshares.push_back(
+                            new NewShare(h,
+                                         0,
+                                         UNDEF,
+                                         ACCESS_UNKNOWN,
+                                         0,
+                                         reinterpret_cast<const byte*>(shareKey.data())));
+                    }
+                }
 
                 if (u != me && !ISUNDEF(u) && !fetchingnodes && !loggedIntoFolder())
                 {
