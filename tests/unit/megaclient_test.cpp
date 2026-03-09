@@ -39,12 +39,11 @@ protected:
         req->in = payload;
         req->contentlength = (m_off_t)payload.size();
 
-        client->megaTestHooks.interceptSCRequest =
-            [this, payload, req](std::unique_ptr<HttpReq>& pendingsc)
+        globalMegaTestHooks.interceptSCRequest = [payload, req](std::unique_ptr<HttpReq>& pendingsc)
         {
             pendingsc.reset(req);
 
-            this->client->megaTestHooks.interceptSCRequest = nullptr;
+            globalMegaTestHooks.interceptSCRequest = nullptr;
         };
 
         return req;

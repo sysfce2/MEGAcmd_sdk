@@ -11,9 +11,6 @@
 #define INCLUDE_INTEGRATION_INTEGRATION_TEST_UTILS_H_
 
 #include "gmock/gmock.h"
-#include "mega/megaclient.h"
-#include "mega/scoped_helpers.h"
-#include "mega/testhooks.h"
 #include "mega/types.h"
 #include "megaapi.h"
 #include "sdk_test_utils.h"
@@ -290,7 +287,8 @@ std::unique_ptr<::mega::MegaNode> uploadFile(::mega::MegaApi* megaApi,
  * @brief Set SC parser mode by installing an SC interception hook that injects `"apm":1/0` into the
  * SC payload.
  */
-void setScParserMode(::mega::MegaClient* client, bool isStreamingMode);
+void setScParserMode(bool isStreamingMode);
+void resetScParserMode();
 }
 
 #endif // INCLUDE_INTEGRATION_INTEGRATION_TEST_UTILS_H_
