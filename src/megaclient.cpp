@@ -3286,6 +3286,7 @@ void MegaClient::exec()
                 pendingsc->protect = true;
                 pendingsc->posturl.append("?sn=");
                 pendingsc->posturl.append(scsn.text());
+                pendingsc->posturl.append("&isn=1");
                 // folder links should not send "sid" to avoid receiving packets unrelated to the folder link
                 bool suppressSID = loggedIntoFolder() ? true : false;
                 pendingsc->posturl.append(getAuthURI(suppressSID, true));
@@ -3846,7 +3847,8 @@ int MegaClient::preparewait()
             }
         }
 
-        if (!pendingscTimedOut && !isParsingSc() && pendingsc && pendingsc->status == REQ_INFLIGHT)
+        if (!pendingscTimedOut && (isStreamingEnabled() || !jsonsc.pos) && pendingsc &&
+            pendingsc->status == REQ_INFLIGHT)
         {
             dstime timeout = pendingsc->lastdata + HttpIO::SCREQUESTTIMEOUT;
             if (timeout > Waiter::ds && timeout < nds)
@@ -5354,6 +5356,11 @@ void MegaClient::sc_storeSn(JSON& json)
     // At this point no CurrentSeqtag should be seen. mCurrentSeqtagSeen is set true
     // when action package is processed and the seq tag matches with mCurrentSeqtag
     assert(!mCurrentSeqtagSeen);
+    sc_purge();
+}
+
+void MegaClient::sc_purge()
+{
     notifypurge();
     if (sctable)
     {
@@ -6548,6 +6555,10 @@ bool MegaClient::sc_checkActionPacket(JSON& json, const Node* lastAPDeletedNode)
         {
         case makeNameid("a"): // action referred by the packet
             cmd = json.getnameid();
+            break;
+
+        case makeNameid("isn"): // interism sn
+            json.storeobject();
             break;
 
         case makeNameid("i"): // id of the client who made the action triggering this packet
@@ -25325,6 +25336,13 @@ bool MegaClient::handleScTimeoutInFlightState()
 
 void MegaClient::handleScInStreaming()
 {
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+    if (megaTestHooks.interceptSCChunk)
+    {
+        megaTestHooks.interceptSCChunk(pendingsc);
+    }
+#endif
+
     switch (static_cast<reqstatus_t>(pendingsc->status))
     {
         case REQ_SUCCESS:

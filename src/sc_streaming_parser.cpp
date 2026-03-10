@@ -107,6 +107,18 @@ void ScStreamingParser::init()
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
 
+    mFilters.emplace("{[a{\"isn",
+                     [this](JSON* json)
+                     {
+                         handle isn;
+                         if (json->storebinary(reinterpret_cast<byte*>(&isn), sizeof(isn)) ==
+                             sizeof(mInterimSn))
+                         {
+                             mInterimSn = isn;
+                         }
+                         return JSONSplitter::CallbackResult::SUCCESS;
+                     });
+
     mFilters.emplace("{[a{",
                      [this](JSON* json)
                      {
@@ -127,6 +139,13 @@ void ScStreamingParser::init()
                                  mClient.sc_procActionPacketWithoutCommonTags(*json,
                                                                               mActionName,
                                                                               mIsSelfOriginating);
+                         }
+
+                         if (mInterimSn != UNDEF && isnCanBeProcessed())
+                         {
+                             mClient.scsn.setScsn(mInterimSn);
+                             mInterimSn = UNDEF;
+                             mNeedToPurge = true;
                          }
 
                          clearActionPacketData();
@@ -191,6 +210,13 @@ void ScStreamingParser::init()
                      [this](JSON*)
                      {
                          mCcst.reset();
+
+                         if (mNeedToPurge)
+                         {
+                             mClient.sc_purge();
+                             mNeedToPurge = false;
+                         }
+
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
 
@@ -243,6 +269,9 @@ void ScStreamingParser::clear()
     mLast = false;
     mLastAPDeletedNode = nullptr;
 
+    mInterimSn = UNDEF;
+    mNeedToPurge = false;
+
     clearActionPacketData();
 
     if (mCcst)
@@ -291,6 +320,13 @@ void ScStreamingParser::checkActionPacket()
             mClient.sc_checkActionPacketWithoutSt(mActionName, mLastAPDeletedNode.get());
         assert(ret);
     }
+}
+
+bool ScStreamingParser::isnCanBeProcessed()
+{
+    // In move operation ("d" + "t" packets), isn is received in "d" packet, but is processed only
+    // after the whole "t" packet is processed.
+    return mLastAPDeletedNode == nullptr;
 }
 
 } // namespace

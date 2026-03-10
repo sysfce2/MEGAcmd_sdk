@@ -55,6 +55,7 @@ namespace mega {
         std::function<void(const double, const m_off_t, const m_off_t)> onTransferReportProgress;
         std::function<void(error e)> onDownloadFailed;
         std::function<void(std::unique_ptr<HttpReq>&)> interceptSCRequest;
+        std::function<void(std::unique_ptr<HttpReq>&)> interceptSCChunk;
         std::function<void(m_off_t&)> onLimitMaxReqSize;
         std::function<void(int&, unsigned)> onHookNumberOfConnections;
         std::function<void(bool&)> onHookDownloadRequestSingleUrl;

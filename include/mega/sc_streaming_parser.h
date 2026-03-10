@@ -50,6 +50,9 @@ private:
     std::unique_ptr<CodeCounter::ScopeTimer> mCcst;
     std::shared_ptr<Node> mLastAPDeletedNode;
 
+    handle mInterimSn;
+    bool mNeedToPurge;
+
     TreeFilters mTreeFilters;
 
 public:
@@ -77,6 +80,7 @@ private:
     void releaseLock();
 
     void checkActionPacket();
+    bool isnCanBeProcessed();
 };
 
 }
