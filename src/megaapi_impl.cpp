@@ -31489,8 +31489,29 @@ MegaFolderUploadController::batchResult MegaFolderUploadController::createNextFo
         tree.childrenLoaded = true;
     }
 
+    bool hasMissingChildren = false;
+
+    if (isBatchRootLevel)
+    {
+        for (auto& t: tree.subtrees)
+        {
+            if (!t->megaNode && tree.megaNode)
+            {
+                t->megaNode.reset(megaApi->getChildNodeOfType(tree.megaNode.get(),
+                                                              t->folderName.c_str(),
+                                                              MegaNode::TYPE_FOLDER));
+            }
+
+            if (!t->megaNode)
+            {
+                hasMissingChildren = true;
+                break;
+            }
+        }
+    }
+
     // recurse until we find nodes not yet created
-    for (auto& t : tree.subtrees)
+    for (auto& t: tree.subtrees)
     {
         assert(newnodes.size() <= MAXNODESUPLOAD);
         if (newnodes.size() >= MAXNODESUPLOAD)
@@ -31501,7 +31522,9 @@ MegaFolderUploadController::batchResult MegaFolderUploadController::createNextFo
 
         if (!t->megaNode && tree.megaNode) // check if our last call created it (or it always existed)
         {
-            t->megaNode.reset(megaApi->getChildNodeOfType(tree.megaNode.get(), t->folderName.c_str(), MegaNode::TYPE_FOLDER));
+            t->megaNode.reset(megaApi->getChildNodeOfType(tree.megaNode.get(),
+                                                          t->folderName.c_str(),
+                                                          MegaNode::TYPE_FOLDER));
         }
 
         // if node doesn't exist yet and we haven't exceeded the limit per batch
@@ -31515,6 +31538,12 @@ MegaFolderUploadController::batchResult MegaFolderUploadController::createNextFo
                 t->newnode.parenthandle = UNDEF;
             }
             newnodes.push_back(std::move(t->newnode));
+        }
+
+        if (isBatchRootLevel && hasMissingChildren && t->megaNode)
+        {
+            // If this level has missing children, only recurse into those branches.
+            continue;
         }
 
         // if newnodes contains at least one newNode, isBatchRootLevel will be false
