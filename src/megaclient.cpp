@@ -23641,7 +23641,8 @@ void KeyManager::propagateKeysForNestedShares(handle promotedNodeHandle,
             for (const auto& [_, existingShare]: *alreadySharedNode->outshares)
             {
                 if (User* existingSharee = existingShare->user;
-                    existingSharee) // Folder links are shared without user.
+                    existingSharee && // Folder links are shared without user.
+                    !verificationRequired(existingSharee->userhandle))
                 {
                     LOG_debug << "Sending sharekey of outshare "
                               << toNodeHandle(promotedOutShareNode->nodehandle)
