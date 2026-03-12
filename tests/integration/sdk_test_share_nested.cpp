@@ -445,10 +445,11 @@ TEST_P(SdkTestShareNested, UploadFilesInNestedShare)
         matchTree(sharerFolderBNode->getHandle(), shareeBobIndex, shareeAliceIndex));
 }
 
-INSTANTIATE_TEST_SUITE_P(UploadFilesInNestedShare,
-                         SdkTestShareNested,
-                         ::testing::Values(SdkTestShareNested::ShareOrder::Forward,
-                                           SdkTestShareNested::ShareOrder::Reverse));
+INSTANTIATE_TEST_SUITE_P(
+    UploadFilesInNestedShare,
+    SdkTestShareNested,
+    ::testing::Values(static_cast<int>(SdkTestShareNested::ShareOrder::Forward),
+                      static_cast<int>(SdkTestShareNested::ShareOrder::Reverse)));
 
 /**
  * @brief Verify sync state transitions for nested shares.
