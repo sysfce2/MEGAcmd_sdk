@@ -784,3 +784,204 @@ TEST_F(SdkTestShareNested, FullTreeUploads)
     ASSERT_NO_FATAL_FAILURE(
         matchTree(sharerFolderANode->getHandle(), sharerIndex, shareeAliceIndex));
 }
+
+/**
+ * @brief Check for correctness if the higher level sharee is unverified.
+ *
+ * It tests whether files uploaded by a new sharee can be decrypted by another sharee whose
+ * higher-level share was created earlier but is still unverified.
+ */
+TEST_F(SdkTestShareNested, UnverifiedHigherLevelSharee)
+{
+    const auto logPre = getLogPrefix();
+
+    LOG_info << "Starting body of " << logPre;
+
+    megaApi[sharerIndex]->setManualVerificationFlag(true);
+    megaApi[shareeAliceIndex]->setManualVerificationFlag(true);
+    megaApi[shareeBobIndex]->setManualVerificationFlag(true);
+
+    ASSERT_NO_FATAL_FAILURE(resetCredentialsIfContactFound(sharerIndex, shareeAliceIndex));
+    ASSERT_NO_FATAL_FAILURE(resetCredentialsIfContactFound(sharerIndex, shareeBobIndex));
+
+    // Make sharer and sharees contacts.
+    ASSERT_NO_FATAL_FAILURE(
+        inviteTestAccount(sharerIndex, shareeAliceIndex, "Sharer inviting Alice"))
+        << "Failure inviting Alice";
+    ASSERT_NO_FATAL_FAILURE(inviteTestAccount(sharerIndex, shareeBobIndex, "Sharer inviting Bob"))
+        << "Failure inviting Bob";
+
+    ASSERT_NO_FATAL_FAILURE(verifyContactCredentials(sharerIndex, shareeBobIndex));
+
+    LOG_info << logPre
+             << "Share folder \"folderA\" to Alice while still unverified and subfolder "
+                "\"folderB\" to Bob.";
+    auto sharerFolderANode = getNodeByPath(FOLDER_A);
+    auto sharerFolderBNode = getNodeByPath(string(FOLDER_A) + "/" + FOLDER_B);
+    ASSERT_TRUE(sharerFolderANode) << "folder \"folderA\" not found.";
+    ASSERT_TRUE(sharerFolderBNode) << "folder \"folderB\" not found.";
+
+    ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderANode.get(),
+                                            {sharerIndex, true},
+                                            {shareeAliceIndex, true},
+                                            MegaShare::ACCESS_FULL));
+
+    ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderBNode.get(),
+                                            {sharerIndex, true},
+                                            {shareeBobIndex, true},
+                                            MegaShare::ACCESS_FULL));
+
+    LOG_info << logPre
+             << "Ensure that Alice still has the share as unverified and that the sharer and Bob "
+                "can see the same nodes and that the tree is decrypted.";
+
+    waitForNodeToBeDecrypted(shareeBobIndex, sharerFolderBNode->getHandle());
+    ASSERT_NO_FATAL_FAILURE(matchTree(sharerFolderBNode->getHandle(), sharerIndex, shareeBobIndex));
+    ASSERT_TRUE(WaitFor(
+        [this]()
+        {
+            return unique_ptr<MegaShareList>(megaApi[sharerIndex]->getUnverifiedOutShares())
+                       ->size() == 1;
+        },
+        60 * 1000));
+
+    {
+        auto shareeAliceFolderANode = std::unique_ptr<MegaNode>{
+            megaApi[shareeAliceIndex]->getNodeByHandle(sharerFolderANode->getHandle())};
+        ASSERT_TRUE(shareeAliceFolderANode);
+        ASSERT_FALSE(shareeAliceFolderANode->isNodeKeyDecrypted())
+            << "Alice should not decrypt nested file before verification.";
+    }
+
+    LOG_info << logPre << "Bob puts a file in the inshare folder.";
+    auto shareeBobFolderBNode = std::unique_ptr<MegaNode>{
+        megaApi[shareeBobIndex]->getNodeByHandle(sharerFolderBNode->getHandle())};
+    ASSERT_TRUE(shareeBobFolderBNode);
+    MegaHandle fromBobInFolderBHandle = INVALID_HANDLE;
+    ASSERT_NO_FATAL_FAILURE(
+        createRemoteFileNode(shareeBobIndex,
+                             FileNodeInfo("fromBobInFolderBWhileAliceUnverified").setSize(100),
+                             shareeBobFolderBNode.get(),
+                             fromBobInFolderBHandle,
+                             sharerIndex));
+
+    waitForNodeToBeDecrypted(sharerIndex, fromBobInFolderBHandle);
+    ASSERT_NO_FATAL_FAILURE(matchTree(sharerFolderBNode->getHandle(), sharerIndex, shareeBobIndex));
+    {
+        std::unique_ptr<MegaNode> aliceNodefromBobInFolderB{
+            megaApi[shareeAliceIndex]->getNodeByHandle(fromBobInFolderBHandle)};
+        ASSERT_TRUE(aliceNodefromBobInFolderB);
+        ASSERT_FALSE(aliceNodefromBobInFolderB->isNodeKeyDecrypted())
+            << "Alice should not decrypt nested file before verification.";
+    }
+
+    LOG_info << logPre << "Verify Alice and ensure the missing nested key is repaired.";
+    ASSERT_NO_FATAL_FAILURE(verifyContactCredentials(sharerIndex, shareeAliceIndex));
+    waitForNodeToBeDecrypted(shareeAliceIndex, sharerFolderANode->getHandle());
+    waitForNodeToBeDecrypted(shareeAliceIndex, fromBobInFolderBHandle);
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderANode->getHandle(), sharerIndex, shareeAliceIndex));
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderBNode->getHandle(), shareeAliceIndex, shareeBobIndex));
+}
+
+/**
+ * @brief Check for correctness if the lower level sharee is unverified.
+ *
+ * It tests whether files uploaded by a new sharee can be decrypted by another sharee whose
+ * lower-level share was created earlier but is still unverified.
+ */
+TEST_F(SdkTestShareNested, UnverifiedLowerLevelSharee)
+{
+    const auto logPre = getLogPrefix();
+
+    LOG_info << "Starting body of " << logPre;
+
+    megaApi[sharerIndex]->setManualVerificationFlag(true);
+    megaApi[shareeAliceIndex]->setManualVerificationFlag(true);
+    megaApi[shareeBobIndex]->setManualVerificationFlag(true);
+
+    ASSERT_NO_FATAL_FAILURE(resetCredentialsIfContactFound(sharerIndex, shareeAliceIndex));
+    ASSERT_NO_FATAL_FAILURE(resetCredentialsIfContactFound(sharerIndex, shareeBobIndex));
+
+    // Make sharer and sharees contacts.
+    ASSERT_NO_FATAL_FAILURE(
+        inviteTestAccount(sharerIndex, shareeAliceIndex, "Sharer inviting Alice"))
+        << "Failure inviting Alice";
+    ASSERT_NO_FATAL_FAILURE(inviteTestAccount(sharerIndex, shareeBobIndex, "Sharer inviting Bob"))
+        << "Failure inviting Bob";
+
+    ASSERT_NO_FATAL_FAILURE(verifyContactCredentials(sharerIndex, shareeAliceIndex));
+
+    LOG_info << logPre
+             << "Share folder \"folderB\" to Bob while still unverified and folder \"folderA\" to "
+                "Alice.";
+    auto sharerFolderANode = getNodeByPath(FOLDER_A);
+    auto sharerFolderBNode = getNodeByPath(string(FOLDER_A) + "/" + FOLDER_B);
+    ASSERT_TRUE(sharerFolderANode) << "folder \"folderA\" not found.";
+    ASSERT_TRUE(sharerFolderBNode) << "folder \"folderB\" not found.";
+    ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderBNode.get(),
+                                            {sharerIndex, true},
+                                            {shareeBobIndex, true},
+                                            MegaShare::ACCESS_FULL));
+    ASSERT_NO_FATAL_FAILURE(createShareAtoB(sharerFolderANode.get(),
+                                            {sharerIndex, true},
+                                            {shareeAliceIndex, true},
+                                            MegaShare::ACCESS_FULL));
+
+    LOG_info << logPre
+             << "Ensure that Bob still has the share as unverified and that the sharer and Alice "
+                "can see the same nodes and that the tree is decrypted.";
+
+    waitForNodeToBeDecrypted(shareeAliceIndex, sharerFolderANode->getHandle());
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderANode->getHandle(), sharerIndex, shareeAliceIndex));
+    ASSERT_TRUE(WaitFor(
+        [this]()
+        {
+            return unique_ptr<MegaShareList>(megaApi[sharerIndex]->getUnverifiedOutShares())
+                       ->size() == 1;
+        },
+        60 * 1000));
+
+    {
+        auto shareeBobFolderBNode = std::unique_ptr<MegaNode>{
+            megaApi[shareeBobIndex]->getNodeByHandle(sharerFolderBNode->getHandle())};
+        ASSERT_TRUE(shareeBobFolderBNode);
+        ASSERT_FALSE(shareeBobFolderBNode->isNodeKeyDecrypted())
+            << "Bob should not decrypt nested file before verification.";
+    }
+
+    auto shareeAliceFolderBNode = std::unique_ptr<MegaNode>{
+        megaApi[shareeAliceIndex]->getNodeByHandle(sharerFolderBNode->getHandle())};
+    ASSERT_TRUE(shareeAliceFolderBNode);
+
+    LOG_info << logPre << "Alice uploads a file to nested folderB.";
+    MegaHandle fromAliceInFolderBHandle = INVALID_HANDLE;
+    ASSERT_NO_FATAL_FAILURE(
+        createRemoteFileNode(shareeAliceIndex,
+                             FileNodeInfo("fromAliceWhileBobUnverified").setSize(100),
+                             shareeAliceFolderBNode.get(),
+                             fromAliceInFolderBHandle,
+                             sharerIndex));
+
+    waitForNodeToBeDecrypted(sharerIndex, fromAliceInFolderBHandle);
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderBNode->getHandle(), sharerIndex, shareeAliceIndex));
+    {
+        std::unique_ptr<MegaNode> bobNode{
+            megaApi[shareeBobIndex]->getNodeByHandle(fromAliceInFolderBHandle)};
+        ASSERT_TRUE(bobNode);
+        ASSERT_FALSE(bobNode->isNodeKeyDecrypted())
+            << "Bob should not decrypt nested file before verification.";
+    }
+
+    LOG_info << logPre << "Verify Bob and ensure the missing nested key is repaired.";
+    ASSERT_NO_FATAL_FAILURE(verifyContactCredentials(sharerIndex, shareeBobIndex));
+    waitForNodeToBeDecrypted(shareeBobIndex, sharerFolderBNode->getHandle());
+    waitForNodeToBeDecrypted(shareeBobIndex, fromAliceInFolderBHandle);
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderANode->getHandle(), sharerIndex, shareeAliceIndex));
+    ASSERT_NO_FATAL_FAILURE(
+        matchTree(sharerFolderBNode->getHandle(), shareeAliceIndex, shareeBobIndex));
+}
