@@ -16995,6 +16995,29 @@ class MegaApi
                          MegaTransferListener* listener = nullptr);
 
         /**
+         * @brief Upload a file or a folder, specifying the parent by handle.
+         *
+         * Identical to the MegaNode* overload above, but accepts a parent handle directly,
+         * avoiding the need to call MegaApi::getNodeByHandle() first.
+         *
+         * @param localPath Local path of the file or folder to upload.
+         * @param parentHandle Handle of the parent node where the file/folder will be created.
+         * @param cancelToken MegaCancelToken used to cancel the upload process safely.
+         * @param options Optional upload customization parameters.
+         * @param listener Optional MegaTransferListener to track this transfer. he app retains the
+         * ownership of the object. It can be deleted after the call returns.
+         * @note In case we find a node in cloud drive with the same content but a different mtime
+         * than the file to be uploaded, this function will try to update it's mtime instead of
+         * starting a new file upload. If setting the mtime fails, the transfer will fail with
+         * API_EWRITE.
+         */
+        void startUpload(const std::string& localPath,
+                         MegaHandle parentHandle,
+                         MegaCancelToken* cancelToken,
+                         const MegaUploadOptions* options,
+                         MegaTransferListener* listener = nullptr);
+
+        /**
          * @brief Download a file or a folder from MEGA, saving custom app data during the transfer
          *
          * If the status of the business account is expired, onTransferFinish will be called with the error

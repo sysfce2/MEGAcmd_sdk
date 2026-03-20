@@ -4033,14 +4033,14 @@ class MegaApiImpl : public MegaApp
         };
 
         void startUpload(const std::string localPath,
-                         MegaNode* parent,
+                         MegaHandle parentHandle,
                          CancelToken cancelToken,
                          const MegaUploadOptionsPrivate& options,
                          MegaTransferListener* listener);
 
         MegaTransferPrivate*
             createUploadTransfer(const LocalPath& localPath,
-                                 MegaNode* parent,
+                                 MegaHandle parentHandle,
                                  const MegaUploadOptionsPrivate& options,
                                  CancelToken cancelToken,
                                  MegaTransferListener* listener,

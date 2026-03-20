@@ -2640,6 +2640,34 @@ using namespace mega;
     }
 }
 
+- (void)startUploadWithLocalPath:(NSString *)localPath
+                    parentHandle:(uint64_t)parentHandle
+                     cancelToken:(nullable MEGACancelToken *)cancelToken
+                         options:(MEGAUploadOptions *)options
+                        delegate:(id<MEGATransferDelegate>)delegate {
+    if (self.megaApi) {
+        auto cppOptions = [self generateUploadOptionsFrom:options];
+        self.megaApi->startUpload(localPath.UTF8String,
+                                  parentHandle,
+                                  cancelToken.getCPtr,
+                                  &cppOptions,
+                                  [self createDelegateMEGATransferListener:delegate singleListener:YES]);
+    }
+}
+
+- (void)startUploadWithLocalPath:(NSString *)localPath
+                    parentHandle:(uint64_t)parentHandle
+                     cancelToken:(nullable MEGACancelToken *)cancelToken
+                         options:(MEGAUploadOptions *)options {
+    if (self.megaApi) {
+        auto cppOptions = [self generateUploadOptionsFrom:options];
+        self.megaApi->startUpload(localPath.UTF8String,
+                                  parentHandle,
+                                  cancelToken.getCPtr,
+                                  &cppOptions);
+    }
+}
+
 - (void)startDownloadNode:(MEGANode *)node localPath:(NSString *)localPath  fileName:(nullable NSString*)fileName appData:(nullable NSString *)appData startFirst:(BOOL) startFirst cancelToken:(nullable MEGACancelToken *)cancelToken collisionCheck:(CollisionCheck)collisionCheck collisionResolution:(CollisionResolution)collisionResolution {
     if (self.megaApi) {
         self.megaApi->startDownload(node.getCPtr, localPath.UTF8String, fileName.UTF8String, appData.UTF8String, startFirst, cancelToken.getCPtr, (int)collisionCheck, (int)collisionResolution, false);
