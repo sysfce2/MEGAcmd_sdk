@@ -133,7 +133,7 @@ void SdkTestShares::createOutgoingShare(MegaHandle hfolder)
 // Get and Check only one incoming share
 void SdkTestShares::getInshare(MegaHandle hfolder)
 {
-    const std::unique_ptr<MegaShareList> shareList{megaApi[1]->getInSharesList()};
+    const std::unique_ptr<MegaShareList> shareList{mShareeApi->getInSharesList()};
     ASSERT_EQ(1, shareList->size()) << "Incoming share not received in auxiliar account";
 
     // Wait for the inshare node to be decrypted
@@ -360,7 +360,7 @@ void SdkTestShares::createNodeTrees()
               doStartUpload(mSharerIndex,
                             &hfile,
                             "file.txt",
-                            node.get(),
+                            std::unique_ptr<MegaNode>{megaApi[0]->getNodeByHandle(subfolder)}.get(),
                             nullptr /*fileName*/,
                             ::mega::MegaApi::INVALID_CUSTOM_MOD_TIME,
                             nullptr /*appData*/,
@@ -673,65 +673,23 @@ TEST_F(SdkTestShares, SdkTestShares)
 
     LOG_info << "___TEST Shares___";
 
-    // Initialize a test scenario : create some folders/files to share
-
     // Create some nodes to share
-    //  |--Shared-folder
+    //  |--sharedfolder
     //    |--subfolder
     //      |--file.txt
     //    |--file.txt
+    ASSERT_NO_FATAL_FAILURE(createNodeTrees());
 
+    const MegaHandle hfolder1 = getHandle("/sharedfolder");
+    const MegaHandle hfolder2 = getHandle("/sharedfolder/subfolder");
+    const MegaHandle hfile1 = getHandle("/sharedfolder/file.txt");
+    const MegaHandle hfile2 = getHandle("/sharedfolder/subfolder/file.txt");
+    // 4 is the sum of two folder and two files
+    unsigned long long inSharedNodeCount = 4;
     std::unique_ptr<MegaNode> rootnode{megaApi[0]->getRootNode()};
-    char foldername1[64] = "Shared-folder";
-    MegaHandle hfolder1 = createFolder(0, foldername1, rootnode.get());
-    ASSERT_NE(hfolder1, UNDEF);
 
     std::unique_ptr<MegaNode> n1(megaApi[0]->getNodeByHandle(hfolder1));
     ASSERT_NE(n1.get(), nullptr);
-    unsigned long long inSharedNodeCount = 1;
-
-    char foldername2[64] = "subfolder";
-    MegaHandle hfolder2 =
-        createFolder(0,
-                     foldername2,
-                     std::unique_ptr<MegaNode>{megaApi[0]->getNodeByHandle(hfolder1)}.get());
-    ASSERT_NE(hfolder2, UNDEF);
-    ++inSharedNodeCount;
-
-    // not a large file since don't need to test transfers here
-    ASSERT_TRUE(createFile(PUBLICFILE.c_str(), false)) << "Couldn't create " << PUBLICFILE.c_str();
-
-    MegaHandle hfile1 = UNDEF;
-    ASSERT_EQ(MegaError::API_OK,
-              doStartUpload(0,
-                            &hfile1,
-                            PUBLICFILE.c_str(),
-                            std::unique_ptr<MegaNode>{megaApi[0]->getNodeByHandle(hfolder1)}.get(),
-                            nullptr /*fileName*/,
-                            ::mega::MegaApi::INVALID_CUSTOM_MOD_TIME,
-                            nullptr /*appData*/,
-                            false /*isSourceTemporary*/,
-                            false /*startFirst*/,
-                            nullptr /*cancelToken*/))
-        << "Cannot upload a test file";
-
-    ++inSharedNodeCount;
-
-    MegaHandle hfile2 = UNDEF;
-    ASSERT_EQ(MegaError::API_OK,
-              doStartUpload(0,
-                            &hfile2,
-                            PUBLICFILE.c_str(),
-                            std::unique_ptr<MegaNode>{megaApi[0]->getNodeByHandle(hfolder2)}.get(),
-                            nullptr /*fileName*/,
-                            ::mega::MegaApi::INVALID_CUSTOM_MOD_TIME,
-                            nullptr /*appData*/,
-                            false /*isSourceTemporary*/,
-                            false /*startFirst*/,
-                            nullptr /*cancelToken*/))
-        << "Cannot upload a second test file";
-
-    ++inSharedNodeCount;
 
     // --- Download authorized node from another account ---
 
@@ -775,42 +733,8 @@ TEST_F(SdkTestShares, SdkTestShares)
     delete nNoAuth;
     delete nAuth;
 
-    // Initialize a test scenario: create a new contact to share to and verify credentials
-
-    string message = "Hi contact. Let's share some stuff";
-
-    mApi[1].contactRequestUpdated = false;
-    ASSERT_NO_FATAL_FAILURE(
-        inviteContact(0, mApi[1].email, message, MegaContactRequest::INVITE_ACTION_ADD));
-    EXPECT_TRUE(waitForResponse(&mApi[1].contactRequestUpdated,
-                                10u)) // at the target side (auxiliar account)
-        << "Contact request creation not received after 10 seconds";
-
-    EXPECT_NO_FATAL_FAILURE(getContactRequest(1, false));
-
-    mApi[0].contactRequestUpdated = mApi[1].contactRequestUpdated = false;
-    EXPECT_NO_FATAL_FAILURE(
-        replyContact(mApi[1].cr.get(), MegaContactRequest::REPLY_ACTION_ACCEPT));
-    EXPECT_TRUE(waitForResponse(&mApi[1].contactRequestUpdated,
-                                10u)) // at the target side (auxiliar account)
-        << "Contact request creation not received after 10 seconds";
-    EXPECT_TRUE(
-        waitForResponse(&mApi[0].contactRequestUpdated, 10u)) // at the source side (main account)
-        << "Contact request creation not received after 10 seconds";
-
-    mApi[1].cr.reset();
-
-    if (gManualVerification)
-    {
-        if (!areCredentialsVerified(0, mApi[1].email))
-        {
-            ASSERT_NO_FATAL_FAILURE(SdkTest::verifyCredentials(0, mApi[1].email));
-        }
-        if (!areCredentialsVerified(1, mApi[0].email))
-        {
-            ASSERT_NO_FATAL_FAILURE(SdkTest::verifyCredentials(1, mApi[0].email));
-        }
-    }
+    // Create contact to share
+    ASSERT_NO_FATAL_FAILURE(createNewContactAndVerify());
 
     auto ownedNodeCount = megaApi[1]->getAccurateNumNodes();
 
@@ -841,68 +765,9 @@ TEST_F(SdkTestShares, SdkTestShares)
     ASSERT_EQ(check1, true);
 
     // --- Create a new outgoing share ---
-    bool check2;
-    mApi[0].mOnNodesUpdateCompletion =
-        createOnNodesUpdateLambda(hfolder1, MegaNode::CHANGE_TYPE_OUTSHARE, check1);
-    mApi[1].mOnNodesUpdateCompletion =
-        createOnNodesUpdateLambda(hfolder1, MegaNode::CHANGE_TYPE_INSHARE, check2);
+    ASSERT_NO_FATAL_FAILURE(createOutgoingShare(hfolder1));
 
-    ASSERT_NO_FATAL_FAILURE(shareFolder(n1.get(), mApi[1].email.c_str(), MegaShare::ACCESS_FULL));
-    ASSERT_TRUE(waitForResponse(&check1)) // at the target side (main account)
-        << "Node update not received after " << maxTimeout << " seconds";
-    ASSERT_TRUE(waitForResponse(&check2)) // at the target side (auxiliar account)
-        << "Node update not received after " << maxTimeout << " seconds";
-
-    // important to reset
-    resetOnNodeUpdateCompletionCBs();
-    ASSERT_EQ(check1, true);
-    ASSERT_EQ(check2, true);
-
-    // --- Check the outgoing share ---
-
-    auto sl = std::unique_ptr<MegaShareList>{megaApi[0]->getOutShares()};
-    ASSERT_EQ(1, sl->size()) << "Outgoing share failed";
-    // Test another interface
-    sl.reset(megaApi[0]->getOutShares(n1.get()));
-    ASSERT_EQ(1, sl->size()) << "Outgoing share failed";
-
-    MegaShare* s = sl->get(0);
-
-    n1.reset(megaApi[0]->getNodeByHandle(hfolder1)); // get an updated version of the node
-
-    ASSERT_EQ(MegaShare::ACCESS_FULL, s->getAccess()) << "Wrong access level of outgoing share";
-    ASSERT_EQ(hfolder1, s->getNodeHandle()) << "Wrong node handle of outgoing share";
-    ASSERT_STRCASEEQ(mApi[1].email.c_str(), s->getUser())
-        << "Wrong email address of outgoing share";
-    ASSERT_TRUE(n1->isShared()) << "Wrong sharing information at outgoing share";
-    ASSERT_TRUE(n1->isOutShare()) << "Wrong sharing information at outgoing share";
-
-    // --- Check the incoming share ---
-
-    sl.reset(megaApi[1]->getInSharesList());
-    ASSERT_EQ(1, sl->size()) << "Incoming share not received in auxiliar account";
-
-    // Wait for the inshare node to be decrypted
-    ASSERT_TRUE(WaitFor(
-        [this, &n1]()
-        {
-            return unique_ptr<MegaNode>(megaApi[1]->getNodeByHandle(n1->getHandle()))
-                ->isNodeKeyDecrypted();
-        },
-        60 * 1000));
-
-    std::unique_ptr<MegaUser> contact(megaApi[1]->getContact(mApi[0].email.c_str()));
-    auto nl = std::unique_ptr<MegaNodeList>{megaApi[1]->getInShares(contact.get())};
-    ASSERT_EQ(1, nl->size()) << "Incoming share not received in auxiliar account";
-    MegaNode* n = nl->get(0);
-
-    ASSERT_EQ(hfolder1, n->getHandle()) << "Wrong node handle of incoming share";
-    ASSERT_STREQ(foldername1, n->getName()) << "Wrong folder name of incoming share";
-    ASSERT_EQ(API_OK,
-              megaApi[1]->checkAccessErrorExtended(n, MegaShare::ACCESS_FULL)->getErrorCode())
-        << "Wrong access level of incoming share";
-    ASSERT_TRUE(n->isInShare()) << "Wrong sharing information at incoming share";
-    ASSERT_TRUE(n->isShared()) << "Wrong sharing information at incoming share";
+    ASSERT_NO_FATAL_FAILURE(getInshare(hfolder1));
 
     auto nodeCountAfterInShares = megaApi[1]->getAccurateNumNodes();
     ASSERT_EQ(ownedNodeCount + inSharedNodeCount, nodeCountAfterInShares);
@@ -913,6 +778,7 @@ TEST_F(SdkTestShares, SdkTestShares)
     // (hfile1 copied to rubbish, renamed to "copy", copied back to hfolder2, move
     // Since there is a file with same name and fingerprint, it will skip the copy and will do
     // delete
+    bool check2;
     mApi[0].mOnNodesUpdateCompletion =
         createOnNodesUpdateLambda(INVALID_HANDLE, MegaNode::CHANGE_TYPE_NEW, check1);
     mApi[1].mOnNodesUpdateCompletion =
@@ -1004,7 +870,7 @@ TEST_F(SdkTestShares, SdkTestShares)
 
     // check the corresponding user alert
     ASSERT_TRUE(
-        checkAlert(1, "New shared folder from " + mApi[0].email, mApi[0].email + ":Shared-folder"));
+        checkAlert(1, "New shared folder from " + mApi[0].email, mApi[0].email + ":sharedfolder"));
 
     // add folders under the share
     char foldernameA[64] = "dummyname1";
@@ -1160,7 +1026,7 @@ TEST_F(SdkTestShares, SdkTestShares)
     auto nodeCountAfterInSharesAddedNestedSubfolder = megaApi[1]->getAccurateNumNodes();
     ASSERT_EQ(ownedNodeCount + inSharedNodeCount, nodeCountAfterInSharesAddedNestedSubfolder);
 
-    // Stop share main folder (Shared-folder)
+    // Stop share main folder (sharedfolder)
     mApi[0].mOnNodesUpdateCompletion =
         createOnNodesUpdateLambda(n1->getHandle(), MegaNode::CHANGE_TYPE_OUTSHARE, check1);
     mApi[1].mOnNodesUpdateCompletion =
@@ -1179,7 +1045,7 @@ TEST_F(SdkTestShares, SdkTestShares)
     auto nodeCountAfterRemoveMainInshare = megaApi[1]->getAccurateNumNodes();
     ASSERT_EQ(ownedNodeCount + nodesAtFolderDummyname2, nodeCountAfterRemoveMainInshare);
 
-    // Share again main folder (Shared-folder)
+    // Share again main folder (sharedfolder)
     mApi[0].mOnNodesUpdateCompletion =
         createOnNodesUpdateLambda(n1->getHandle(), MegaNode::CHANGE_TYPE_OUTSHARE, check1);
     mApi[1].mOnNodesUpdateCompletion =
@@ -1238,6 +1104,11 @@ TEST_F(SdkTestShares, SdkTestShares)
     resetOnNodeUpdateCompletionCBs();
     ASSERT_EQ(check1, true);
     ASSERT_EQ(check2, true);
+
+    auto sl = std::unique_ptr<MegaShareList>{megaApi[0]->getOutShares()};
+    std::unique_ptr<MegaUser> contact(megaApi[1]->getContact(mApi[0].email.c_str()));
+    auto nl = std::unique_ptr<MegaNodeList>{megaApi[1]->getInShares(contact.get())};
+    MegaNode* n = nl->get(0);
 
     contact.reset(megaApi[1]->getContact(mApi[0].email.c_str()));
     nl.reset(megaApi[1]->getInShares(contact.get()));
@@ -1351,7 +1222,7 @@ TEST_F(SdkTestShares, SdkTestShares)
         MegaUserAlert* a = list->get(list->size() - 1);
         ASSERT_STRCASEEQ(a->getTitle(),
                          ("Access to folders shared by " + mApi[0].email + " was removed").c_str());
-        ASSERT_STRCASEEQ(a->getPath(), (mApi[0].email + ":Shared-folder").c_str());
+        ASSERT_STRCASEEQ(a->getPath(), (mApi[0].email + ":sharedfolder").c_str());
         ASSERT_NE(a->getNodeHandle(), UNDEF);
         delete list;
     }
@@ -1388,7 +1259,7 @@ TEST_F(SdkTestShares, SdkTestShares)
     // Test another interface
     sl.reset(megaApi[0]->getOutShares(node.get()));
     ASSERT_EQ(1, sl->size()) << "Pending outgoing share failed";
-    s = sl->get(0);
+    MegaShare* s = sl->get(0);
     node.reset(megaApi[0]->getNodeByHandle(s->getNodeHandle()));
 
     ASSERT_FALSE(node->isShared()) << "Node is already shared, must be pending";
@@ -1591,153 +1462,30 @@ TEST_F(SdkTestShares, SdkTestShares2)
     // Run in action packet non-streaming parsing mode
     sdk_test::setScParserMode(false);
 
-    // --- Create some nodes to share ---
-    //  |--Shared-folder
+    // Create some nodes to share
+    //  |--sharedfolder
     //    |--subfolder
     //      |--file.txt
     //    |--file.txt
+    ASSERT_NO_FATAL_FAILURE(createNodeTrees());
+    // Create contact to share
+    ASSERT_NO_FATAL_FAILURE(createNewContactAndVerify());
 
-    std::unique_ptr<MegaNode> rootnode{megaApi[0]->getRootNode()};
-    static constexpr char foldername1[] = "Shared-folder";
-    MegaHandle hfolder1 = createFolder(0, foldername1, rootnode.get());
-    ASSERT_NE(hfolder1, UNDEF) << "Cannot create " << foldername1;
+    const MegaHandle hfolder1 = getHandle("/sharedfolder");
+    const MegaHandle hfolder2 = getHandle("/sharedfolder/subfolder");
+    const MegaHandle hfile1 = getHandle("/sharedfolder/file.txt");
+    const MegaHandle hfile2 = getHandle("/sharedfolder/subfolder/file.txt");
 
     std::unique_ptr<MegaNode> n1{megaApi[0]->getNodeByHandle(hfolder1)};
     ASSERT_NE(n1, nullptr);
 
-    static constexpr char foldername2[] = "subfolder";
-    MegaHandle hfolder2 = createFolder(0, foldername2, n1.get());
-    ASSERT_NE(hfolder2, UNDEF) << "Cannot create " << foldername2;
-
-    createFile(PUBLICFILE.c_str(),
-               false); // not a large file since don't need to test transfers here
-
-    MegaHandle hfile1 = 0;
-    ASSERT_EQ(MegaError::API_OK,
-              doStartUpload(0,
-                            &hfile1,
-                            PUBLICFILE.c_str(),
-                            n1.get(),
-                            nullptr /*fileName*/,
-                            ::mega::MegaApi::INVALID_CUSTOM_MOD_TIME,
-                            nullptr /*appData*/,
-                            false /*isSourceTemporary*/,
-                            false /*startFirst*/,
-                            nullptr /*cancelToken*/))
-        << "Cannot upload a test file";
-
-    MegaHandle hfile2 = 0;
-    ASSERT_EQ(MegaError::API_OK,
-              doStartUpload(0,
-                            &hfile2,
-                            PUBLICFILE.c_str(),
-                            std::unique_ptr<MegaNode>{megaApi[0]->getNodeByHandle(hfolder2)}.get(),
-                            nullptr /*fileName*/,
-                            ::mega::MegaApi::INVALID_CUSTOM_MOD_TIME,
-                            nullptr /*appData*/,
-                            false /*isSourceTemporary*/,
-                            false /*startFirst*/,
-                            nullptr /*cancelToken*/))
-        << "Cannot upload a second test file";
-
-    // --- Create a new contact to share to ---
-
-    string message = "Hi contact. Let's share some stuff";
-
-    mApi[1].contactRequestUpdated = false;
-    ASSERT_NO_FATAL_FAILURE(
-        inviteContact(0, mApi[1].email, message, MegaContactRequest::INVITE_ACTION_ADD));
-    ASSERT_TRUE(
-        waitForResponse(&mApi[1].contactRequestUpdated)) // at the target side (auxiliar account)
-        << "Contact request creation not received after " << maxTimeout << " seconds";
-
-    ASSERT_NO_FATAL_FAILURE(getContactRequest(1, false));
-
-    mApi[0].contactRequestUpdated = mApi[1].contactRequestUpdated = false;
-    ASSERT_NO_FATAL_FAILURE(
-        replyContact(mApi[1].cr.get(), MegaContactRequest::REPLY_ACTION_ACCEPT));
-    ASSERT_TRUE(
-        waitForResponse(&mApi[1].contactRequestUpdated)) // at the target side (auxiliar account)
-        << "Contact request creation not received after " << maxTimeout << " seconds";
-    ASSERT_TRUE(
-        waitForResponse(&mApi[0].contactRequestUpdated)) // at the source side (main account)
-        << "Contact request creation not received after " << maxTimeout << " seconds";
-
-    mApi[1].cr.reset();
-
-    // --- Verify credentials in both accounts ---
-
-    if (gManualVerification)
-    {
-        if (!areCredentialsVerified(0, mApi[1].email))
-        {
-            ASSERT_NO_FATAL_FAILURE(SdkTest::verifyCredentials(0, mApi[1].email));
-        }
-        if (!areCredentialsVerified(1, mApi[0].email))
-        {
-            ASSERT_NO_FATAL_FAILURE(SdkTest::verifyCredentials(1, mApi[0].email));
-        }
-    }
-
     // --- Share a folder with User2 ---
-    MegaHandle nodeHandle = n1->getHandle();
-    bool check1, check2;
-    mApi[0].mOnNodesUpdateCompletion =
-        createOnNodesUpdateLambda(nodeHandle, MegaNode::CHANGE_TYPE_OUTSHARE, check1);
-    mApi[1].mOnNodesUpdateCompletion =
-        createOnNodesUpdateLambda(nodeHandle, MegaNode::CHANGE_TYPE_INSHARE, check2);
-
-    ASSERT_NO_FATAL_FAILURE(shareFolder(n1.get(), mApi[1].email.c_str(), MegaShare::ACCESS_FULL));
-    ASSERT_TRUE(waitForResponse(&check1)) // at the target side (main account)
-        << "Node update not received after " << maxTimeout << " seconds";
-    ASSERT_TRUE(waitForResponse(&check2)) // at the target side (auxiliar account)
-        << "Node update not received after " << maxTimeout << " seconds";
-    // important to reset
-    resetOnNodeUpdateCompletionCBs();
-    ASSERT_EQ(check1, true);
-    ASSERT_EQ(check2, true);
-
-    // --- Check the outgoing share from User1 ---
-
-    std::unique_ptr<MegaShareList> sl{megaApi[0]->getOutShares()};
-    ASSERT_EQ(1, sl->size()) << "Outgoing share failed";
-    MegaShare* s = sl->get(0);
-
-    n1.reset(megaApi[0]->getNodeByHandle(hfolder1)); // get an updated version of the node
-
-    ASSERT_EQ(MegaShare::ACCESS_FULL, s->getAccess()) << "Wrong access level of outgoing share";
-    ASSERT_EQ(hfolder1, s->getNodeHandle()) << "Wrong node handle of outgoing share";
-    ASSERT_STRCASEEQ(mApi[1].email.c_str(), s->getUser())
-        << "Wrong email address of outgoing share";
-    ASSERT_TRUE(n1->isShared()) << "Wrong sharing information at outgoing share";
-    ASSERT_TRUE(n1->isOutShare()) << "Wrong sharing information at outgoing share";
-
-    // --- Check the incoming share to User2 ---
-
-    sl.reset(megaApi[1]->getInSharesList());
-    ASSERT_EQ(1, sl->size()) << "Incoming share not received in auxiliar account";
-
-    // Wait for the inshare node to be decrypted
-    ASSERT_TRUE(WaitFor(
-        [this, &n1]()
-        {
-            return unique_ptr<MegaNode>(megaApi[1]->getNodeByHandle(n1->getHandle()))
-                ->isNodeKeyDecrypted();
-        },
-        60 * 1000));
+    ASSERT_NO_FATAL_FAILURE(createOutgoingShare(hfolder1));
+    ASSERT_NO_FATAL_FAILURE(getInshare(hfolder1));
 
     std::unique_ptr<MegaUser> contact(megaApi[1]->getContact(mApi[0].email.c_str()));
     std::unique_ptr<MegaNodeList> nl(megaApi[1]->getInShares(contact.get()));
-    ASSERT_EQ(1, nl->size()) << "Incoming share not received in auxiliar account";
     MegaNode* n = nl->get(0);
-
-    ASSERT_EQ(hfolder1, n->getHandle()) << "Wrong node handle of incoming share";
-    ASSERT_STREQ(foldername1, n->getName()) << "Wrong folder name of incoming share";
-    ASSERT_EQ(MegaError::API_OK,
-              megaApi[1]->checkAccessErrorExtended(n, MegaShare::ACCESS_FULL)->getErrorCode())
-        << "Wrong access level of incoming share";
-    ASSERT_TRUE(n->isInShare()) << "Wrong sharing information at incoming share";
-    ASSERT_TRUE(n->isShared()) << "Wrong sharing information at incoming share";
 
     // --- Check that User2 (sharee) cannot tag the incoming share as favourite ---
 
@@ -1807,13 +1555,14 @@ TEST_F(SdkTestShares, SdkTestShares2)
         << "Node handles are not the expected ones";
 
     // --- User2 add file ---
-    //  |--Shared-folder
+    //  |--sharedfolder
     //    |--subfolder
     //      |--by_user_2.txt
 
     static constexpr char fileByUser2[] = "by_user_2.txt";
     createFile(fileByUser2, false); // not a large file since don't need to test transfers here
     MegaHandle hfile2U2 = 0;
+    bool check1, check2;
     mApi[1].mOnNodesUpdateCompletion =
         createOnNodesUpdateLambda(INVALID_HANDLE, MegaNode::CHANGE_TYPE_NEW, check1);
     mApi[0].mOnNodesUpdateCompletion =
