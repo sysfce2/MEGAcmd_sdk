@@ -73,14 +73,14 @@ void SdkTestShares::createNewContactAndVerify()
 
     // Accept the request
     mSharer->contactRequestUpdated = false;
-    mSharer->contactRequestUpdated = false;
+    mSharee->contactRequestUpdated = false;
     ASSERT_NO_FATAL_FAILURE(
         replyContact(mSharee->cr.get(), MegaContactRequest::REPLY_ACTION_ACCEPT));
     ASSERT_TRUE(waitForResponse(&mSharee->contactRequestUpdated, 10u))
         << "Contact request creation not received by the sharee after 10 seconds";
     ASSERT_TRUE(waitForResponse(&mSharer->contactRequestUpdated, 10u))
         << "Contact request creation not received by the sharer after 10 seconds";
-    mSharer->cr.reset();
+    mSharee->cr.reset();
 
     // Verify credential
     ASSERT_NO_FATAL_FAILURE(verifyCredentials(mSharerIndex, mSharer, mShareeIndex, mSharee));
