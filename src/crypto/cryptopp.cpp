@@ -734,7 +734,7 @@ void SymmCipher::ctr_crypt(byte* data, unsigned len, m_off_t pos, ctr_iv ctriv, 
 {
     assert(!(pos & (KEYLENGTH - 1)));
 
-    byte ctr[BLOCKSIZE], tmp[BLOCKSIZE];
+    byte ctr[BLOCKSIZE];
 
     MemAccess::set<int64_t>(ctr, static_cast<int64_t>(ctriv));
     setint64(pos / BLOCKSIZE, ctr + sizeof ctriv);
@@ -745,43 +745,58 @@ void SymmCipher::ctr_crypt(byte* data, unsigned len, m_off_t pos, ctr_iv ctriv, 
         memcpy(mac + sizeof ctriv, ctr, sizeof ctriv);
     }
 
-    while ((int)len > 0)
+    // Two-phase approach: separate CTR keystream from CBC-MAC computation.
+    // CryptoPP's CTR mode pipelines multiple AES blocks via AES-NI, giving
+    // significantly higher throughput than the per-block ecb_encrypt loop.
+
+    const unsigned paddedLen = (len + BLOCKSIZE - 1) & ~static_cast<unsigned>(BLOCKSIZE - 1);
+
+    if (encrypt)
     {
-        if (encrypt)
+        // Phase 1: CBC-MAC on plaintext (must happen before CTR overwrites data)
+        if (mac)
         {
-            if(mac)
+            byte* p = data;
+            long remaining = len;
+            while (remaining > 0)
             {
-                xorblock(data, mac);
+                xorblock(p, mac);
                 ecb_encrypt(mac);
-            }
-
-            ecb_encrypt(ctr, tmp);
-            xorblock(tmp, data);
-        }
-        else
-        {
-            ecb_encrypt(ctr, tmp);
-            xorblock(tmp, data);
-
-            if (mac)
-            {
-                if (len >= (unsigned)BLOCKSIZE)
-                {
-                    xorblock(data, mac);
-                }
-                else
-                {
-                    xorblock(data, mac, static_cast<int>(len));
-                }
-
-                ecb_encrypt(mac);
+                p += BLOCKSIZE;
+                remaining -= BLOCKSIZE;
             }
         }
 
-        len -= BLOCKSIZE;
-        data += BLOCKSIZE;
+        // Phase 2: Bulk CTR encryption via CryptoPP's pipelined CTR mode
+        CTR_Mode<AES>::Encryption ctrMode;
+        ctrMode.SetKeyWithIV(key, KEYLENGTH, ctr, BLOCKSIZE);
+        ctrMode.ProcessData(data, data, paddedLen);
+    }
+    else
+    {
+        // Phase 1: Bulk CTR decryption (produces plaintext)
+        CTR_Mode<AES>::Encryption ctrMode;
+        ctrMode.SetKeyWithIV(key, KEYLENGTH, ctr, BLOCKSIZE);
+        ctrMode.ProcessData(data, data, paddedLen);
 
-        incblock(ctr);
+        // Phase 2: CBC-MAC on decrypted plaintext
+        if (mac)
+        {
+            byte* p = data;
+            unsigned remaining = len;
+            while (remaining >= static_cast<unsigned>(BLOCKSIZE))
+            {
+                xorblock(p, mac);
+                ecb_encrypt(mac);
+                p += BLOCKSIZE;
+                remaining -= BLOCKSIZE;
+            }
+            if (remaining > 0)
+            {
+                xorblock(p, mac, static_cast<int>(remaining));
+                ecb_encrypt(mac);
+            }
+        }
     }
 }
 
