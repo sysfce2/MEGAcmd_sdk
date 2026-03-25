@@ -2618,6 +2618,9 @@ bool PosixFileSystemAccess::getlocalfstype(const LocalPath& path, FileSystemType
         case MSDOS_SUPER_MAGIC:
             type = FS_FAT32;
             break;
+        case EXFAT_SUPER_MAGIC:
+            type = FS_EXFAT;
+            break;
         case HFS_SUPER_MAGIC:
         case HFSPLUS_SUPER_MAGIC:
             type = FS_HFS;

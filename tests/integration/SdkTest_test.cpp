@@ -12334,6 +12334,7 @@ TEST_F(SdkTest, EscapesTrailingDots)
 
     const auto curPath = fs::current_path().string();
     const auto fsType = fileSystemAccess->getlocalfstype(LocalPath::fromAbsolutePath(curPath));
+    LOG_info << "fsType: " << fileSystemAccess->fstypetostring(fsType);
     const bool escapesTrailingDots = fileSystemAccess->needsTrailingDotEscape(fsType);
     const char* const trailingDotPath = escapesTrailingDots ? curPath.c_str() : nullptr;
 
@@ -12441,6 +12442,7 @@ TEST_F(SdkTest, SdkTestStartDownloadTrailingDotName)
     // Detect whether the download destination filesystem escapes trailing dots.
     const auto downloadFsType = fileSystemAccess->getlocalfstype(
         LocalPath::fromAbsolutePath(path_u8string(downloadDirPath)));
+    LOG_info << "downloadFsType: " << fileSystemAccess->fstypetostring(downloadFsType);
     const bool downloadFsEscapesTrailingDots =
         fileSystemAccess->needsTrailingDotEscape(downloadFsType);
 

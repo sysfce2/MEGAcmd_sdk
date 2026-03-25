@@ -9080,6 +9080,7 @@ TEST_F(SyncTest, TrailingDotNamesSynchronizeCorrectly)
     // Determine if trailing dots are escaped on the local sync filesystem.
     const auto syncFsType =
         cd->client.fsaccess->getlocalfstype(LocalPath::fromAbsolutePath(path_u8string(TESTROOT)));
+    LOG_info << "syncFsType: " << cd->client.fsaccess->fstypetostring(syncFsType);
     const bool syncFsEscapesTrailingDots = cd->client.fsaccess->needsTrailingDotEscape(syncFsType);
 
     const string localFolder1 = syncFsEscapesTrailingDots ? "d%2e" : cloudFolder1;
