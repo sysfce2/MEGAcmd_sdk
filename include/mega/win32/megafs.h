@@ -66,7 +66,7 @@ public:
                             Waiter* notificationWaiter) override;
 #endif
 
-    void escapefsincompatible(string*, FileSystemType fileSystemType) const override;
+    bool needsTrailingDotEscape(FileSystemType fileSystemType) const override;
 
     bool issyncsupported(const LocalPath&, bool&, SyncError&, SyncWarning&) override;
 

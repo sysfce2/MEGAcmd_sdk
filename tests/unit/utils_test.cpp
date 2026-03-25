@@ -135,90 +135,44 @@ TEST(Filesystem, UnescapesEscapedCharacters)
 TEST(Filesystem, EscapesTrailingDots)
 {
     using namespace mega;
+    using mega::FileSystemType; // resolve ambiguity with Windows SDK's FileSystemType
 
     FSACCESS_CLASS fsAccess;
-
-    // Trailing-dot escaping is platform-specific.
-    // - On Android (SAF/DocumentFile) and Windows, names ending in '.' are not supported,
-    //   so we escape trailing dots regardless of filesystem type.
-    // - On other platforms, trailing dots are left intact.
-#if defined(__ANDROID__) || defined(WIN32) || defined(_WIN32)
-    for (const auto fsType: {FS_UNKNOWN,
-                             FS_EXT,
-                             FS_F2FS,
-                             FS_XFS,
-                             FS_APFS,
-                             FS_HFS,
-                             FS_FAT32,
-                             FS_EXFAT,
-                             FS_NTFS,
-                             FS_SDCARDFS})
+    const std::initializer_list<FileSystemType> fsTypes = {FS_UNKNOWN,
+                                                           FS_EXT,
+                                                           FS_F2FS,
+                                                           FS_XFS,
+                                                           FS_APFS,
+                                                           FS_HFS,
+                                                           FS_FAT32,
+                                                           FS_EXFAT,
+                                                           FS_NTFS,
+                                                           FS_SDCARDFS};
+    const auto assertEscapedName =
+        [&fsAccess](const char* input, const char* expected, FileSystemType fsType)
     {
-        {
-            string name = "file.";
-            fsAccess.escapefsincompatible(&name, fsType);
-            ASSERT_EQ(name, "file%2e") << "fsType=" << fsType;
-        }
-
-        {
-            string name = "file...";
-            fsAccess.escapefsincompatible(&name, fsType);
-            ASSERT_EQ(name, "file%2e%2e%2e") << "fsType=" << fsType;
-        }
-
-        {
-            string name = ".hidden.";
-            fsAccess.escapefsincompatible(&name, fsType);
-            ASSERT_EQ(name, ".hidden%2e") << "fsType=" << fsType;
-        }
-
-        {
-            string name = "file.txt";
-            fsAccess.escapefsincompatible(&name, fsType);
-            ASSERT_EQ(name, "file.txt") << "fsType=" << fsType;
-        }
-
-        {
-            string name = ".";
-            fsAccess.escapefsincompatible(&name, fsType);
-            ASSERT_EQ(name, "%2e") << "fsType=" << fsType;
-        }
-
-        {
-            string name = "..";
-            fsAccess.escapefsincompatible(&name, fsType);
-            ASSERT_EQ(name, "%2e%2e") << "fsType=" << fsType;
-        }
-    }
-#else
-    for (const auto fsType: {FS_UNKNOWN,
-                             FS_EXT,
-                             FS_F2FS,
-                             FS_XFS,
-                             FS_APFS,
-                             FS_HFS,
-                             FS_FAT32,
-                             FS_EXFAT,
-                             FS_NTFS,
-                             FS_SDCARDFS})
-    {
-        string name = "file.";
+        string name = input;
         fsAccess.escapefsincompatible(&name, fsType);
-        ASSERT_EQ(name, "file.") << "fsType=" << fsType;
+        ASSERT_EQ(name, expected) << "fsType=" << fsType;
+    };
+    const auto escapesTrailingDots = [&fsAccess](FileSystemType fsType)
+    {
+        return fsAccess.needsTrailingDotEscape(fsType);
+    };
+
+    for (const auto fsType: fsTypes)
+    {
+        const bool trailingDotsEscaped = escapesTrailingDots(fsType);
+
+        assertEscapedName("file.", trailingDotsEscaped ? "file%2e" : "file.", fsType);
+        assertEscapedName("file...", trailingDotsEscaped ? "file%2e%2e%2e" : "file...", fsType);
+        assertEscapedName(".hidden.", trailingDotsEscaped ? ".hidden%2e" : ".hidden.", fsType);
+        assertEscapedName("file.txt", "file.txt", fsType);
 
         // Whole-name "." and ".." are still escaped (platform-independent behavior).
-        {
-            string dot = ".";
-            fsAccess.escapefsincompatible(&dot, fsType);
-            ASSERT_EQ(dot, "%2e") << "fsType=" << fsType;
-        }
-        {
-            string dotdot = "..";
-            fsAccess.escapefsincompatible(&dotdot, fsType);
-            ASSERT_EQ(dotdot, "%2e%2e") << "fsType=" << fsType;
-        }
+        assertEscapedName(".", "%2e", fsType);
+        assertEscapedName("..", "%2e%2e", fsType);
     }
-#endif
 }
 
 TEST(Filesystem, TrailingDotsRoundTrip)

@@ -9077,21 +9077,18 @@ TEST_F(SyncTest, TrailingDotNamesSynchronizeCorrectly)
     const string cloudFile1 = "f.";
     const string cloudFile2 = "ff..";
 
-#if defined(__ANDROID__) || defined(WIN32) || defined(_WIN32)
-    const string localFolder1 = "d%2e";
-    const string localFolder2 = "dd%2e%2e";
-    const string localFile1 = "f%2e";
-    const string localFile2 = "ff%2e%2e";
-    const string localUploadFolder = "ld%2e";
-    const string localUploadFile = "lf%2e";
-#else
-    const string localFolder1 = cloudFolder1;
-    const string localFolder2 = cloudFolder2;
-    const string localFile1 = cloudFile1;
-    const string localFile2 = cloudFile2;
-    const string localUploadFolder = "ld.";
-    const string localUploadFile = "lf.";
-#endif
+    // Determine if trailing dots are escaped on the local sync filesystem.
+    const auto syncFsType =
+        cd->client.fsaccess->getlocalfstype(LocalPath::fromAbsolutePath(path_u8string(TESTROOT)));
+    const bool syncFsEscapesTrailingDots = cd->client.fsaccess->needsTrailingDotEscape(syncFsType);
+
+    const string localFolder1 = syncFsEscapesTrailingDots ? "d%2e" : cloudFolder1;
+    const string localFolder2 = syncFsEscapesTrailingDots ? "dd%2e%2e" : cloudFolder2;
+    const string localFile1 = syncFsEscapesTrailingDots ? "f%2e" : cloudFile1;
+    const string localFile2 = syncFsEscapesTrailingDots ? "ff%2e%2e" : cloudFile2;
+    const string localUploadFolder = syncFsEscapesTrailingDots ? "ld%2e" : "ld.";
+    const string localUploadFile = syncFsEscapesTrailingDots ? "lf%2e" : "lf.";
+
     const string cloudUploadFolder = "ld.";
     const string cloudUploadFile = "lf.";
 

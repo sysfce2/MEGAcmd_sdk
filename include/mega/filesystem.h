@@ -724,7 +724,8 @@ struct MEGA_API FileSystemAccess : public EventTrigger
     bool decodeEscape(const char* s, char& escapedChar) const;
 
     bool islocalfscompatible(const int character, const FileSystemType type) const;
-    virtual void escapefsincompatible(string*, FileSystemType fileSystemType) const;
+    void escapefsincompatible(string*, FileSystemType fileSystemType) const;
+    virtual bool needsTrailingDotEscape(FileSystemType fileSystemType) const;
 
     static const char *fstypetostring(FileSystemType type);
     virtual bool getlocalfstype(const LocalPath& path, FileSystemType& type) const = 0;
@@ -894,7 +895,7 @@ struct MEGA_API FileSystemAccess : public EventTrigger
 
 protected:
     // escape trailing dots in the name
-    static void escapeTrailingDots(string* name);
+    static void escapeTrailingDots(string& name);
 
     // Specifies the minimum permissions allowed for directories.
     static std::atomic<int> mMinimumDirectoryPermissions;

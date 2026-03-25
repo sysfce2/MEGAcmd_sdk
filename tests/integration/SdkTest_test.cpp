@@ -12316,9 +12316,10 @@ TEST_F(SdkTest, EscapesTrailingDots)
     MegaApi* api = megaApi[0].get();
     ASSERT_NE(api, nullptr);
 
-    auto check = [api](const string& input, const string& expectedEscaped)
+    auto check =
+        [api](const string& input, const string& expectedEscaped, const char* path = nullptr)
     {
-        unique_ptr<char[]> escaped(api->escapeFsIncompatible(input.c_str(), nullptr));
+        unique_ptr<char[]> escaped(api->escapeFsIncompatible(input.c_str(), path));
         ASSERT_NE(escaped.get(), nullptr);
         ASSERT_STREQ(expectedEscaped.c_str(), escaped.get());
 
@@ -12331,17 +12332,15 @@ TEST_F(SdkTest, EscapesTrailingDots)
     check(".", "%2e");
     check("..", "%2e%2e");
 
-#if defined(__ANDROID__) || defined(WIN32) || defined(_WIN32)
-    check("trailing.", "trailing%2e");
-    check("trailing..", "trailing%2e%2e");
-    check("mid.dle.", "mid.dle%2e");
-    check("...", "%2e%2e%2e");
-#else
-    check("trailing.", "trailing.");
-    check("trailing..", "trailing..");
-    check("mid.dle.", "mid.dle.");
-    check("...", "...");
-#endif
+    const auto curPath = fs::current_path().string();
+    const auto fsType = fileSystemAccess->getlocalfstype(LocalPath::fromAbsolutePath(curPath));
+    const bool escapesTrailingDots = fileSystemAccess->needsTrailingDotEscape(fsType);
+    const char* const trailingDotPath = escapesTrailingDots ? curPath.c_str() : nullptr;
+
+    check("trailing.", escapesTrailingDots ? "trailing%2e" : "trailing.", trailingDotPath);
+    check("trailing..", escapesTrailingDots ? "trailing%2e%2e" : "trailing..", trailingDotPath);
+    check("mid.dle.", escapesTrailingDots ? "mid.dle%2e" : "mid.dle.", trailingDotPath);
+    check("...", escapesTrailingDots ? "%2e%2e%2e" : "...", trailingDotPath);
 }
 
 TEST_F(SdkTest, SdkTestStartUploadTrailingDotName)
@@ -12439,27 +12438,25 @@ TEST_F(SdkTest, SdkTestStartDownloadTrailingDotName)
             << "Expected downloaded file missing: " << path_u8string(expectedDownloadedPath);
     };
 
-// download the file using the name with the escaped dot
-#if defined(__ANDROID__) || defined(WIN32) || defined(_WIN32)
-    downloadFile(uploadSrcNode.get(), downloadDirPath, nullptr, fileEscapedName);
-#else
-    downloadFile(uploadSrcNode.get(), downloadDirPath, nullptr, fileUnescapedName);
-#endif
+    // Detect whether the download destination filesystem escapes trailing dots.
+    const auto downloadFsType = fileSystemAccess->getlocalfstype(
+        LocalPath::fromAbsolutePath(path_u8string(downloadDirPath)));
+    const bool downloadFsEscapesTrailingDots =
+        fileSystemAccess->needsTrailingDotEscape(downloadFsType);
 
-    // download the file using a custom name with an escaped dot
+    // Download the file using the name with the escaped dot.
+    downloadFile(uploadSrcNode.get(),
+                 downloadDirPath,
+                 nullptr,
+                 downloadFsEscapesTrailingDots ? fileEscapedName : fileUnescapedName);
+
+    // Download the file using a custom name with an escaped dot.
     const std::string unescapedCustomName{"trailing."};
     const std::string escapedCustomName{"trailing%2e"};
-#if defined(__ANDROID__) || defined(WIN32) || defined(_WIN32)
     downloadFile(uploadSrcNode.get(),
                  downloadDirPath,
                  unescapedCustomName.c_str(),
-                 escapedCustomName);
-#else
-    downloadFile(uploadSrcNode.get(),
-                 downloadDirPath,
-                 unescapedCustomName.c_str(),
-                 unescapedCustomName);
-#endif
+                 downloadFsEscapesTrailingDots ? escapedCustomName : unescapedCustomName);
 }
 
 TEST_F(SdkTest, RecursiveUploadWithLogout)

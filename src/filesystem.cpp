@@ -712,33 +712,32 @@ bool FileSystemAccess::islocalfscompatible(const int character, const FileSystem
     }
 }
 
-void FileSystemAccess::escapeTrailingDots(string* name)
+void FileSystemAccess::escapeTrailingDots(string& name)
 {
-    size_t pos = name->size();
-    while (pos > 0 && (*name)[pos - 1] == '.')
+    size_t pos = name.size();
+    while (pos > 0 && name[pos - 1] == '.')
     {
         --pos;
     }
 
-    const size_t trailingDots = name->size() - pos;
+    const size_t trailingDots = name.size() - pos;
     if (trailingDots == 0)
     {
         return;
     }
 
-    string replacement;
-    replacement.reserve(trailingDots * 3);
+    name.reserve(name.size() + trailingDots * 2);
+    name.erase(pos);
     for (size_t j = 0; j < trailingDots; ++j)
     {
-        replacement += "%2e";
+        name.append("%2e");
     }
-
-    name->replace(pos, trailingDots, replacement);
 }
 
 // replace characters that are not allowed in local fs names with a %xx escape sequence
 void FileSystemAccess::escapefsincompatible(string* name, FileSystemType fileSystemType) const
 {
+    assert(name != nullptr);
     if (!name->compare(".."))
     {
         name->replace(0, 2, "%2e%2e");
@@ -770,10 +769,20 @@ void FileSystemAccess::escapefsincompatible(string* name, FileSystemType fileSys
         }
         i += utf8seqsize;
     }
+    if (needsTrailingDotEscape(fileSystemType))
+    {
+        escapeTrailingDots(*name);
+    }
+}
+
+bool FileSystemAccess::needsTrailingDotEscape(FileSystemType fileSystemType) const
+{
+    return fileSystemType == FS_FAT32 || fileSystemType == FS_EXFAT;
 }
 
 void FileSystemAccess::unescapefsincompatible(string *name) const
 {
+    assert(name != nullptr);
     if (!name->compare("%2e%2e"))
     {
         name->replace(0, 6, "..");
