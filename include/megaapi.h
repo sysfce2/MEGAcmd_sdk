@@ -12805,7 +12805,8 @@ class MegaApi
         /**
          * @brief Effectively parks the user's account without creating a new fresh account.
          *
-         * If no user is logged in, you will get the error code MegaError::API_EACCESS in onRequestFinish().
+         * If no user is logged in, you will get the error code MegaError::API_EACCESS in
+         * onRequestFinish().
          *
          * The contents of the account will then be purged after 60 days. Once the account is
          * parked, the user needs to contact MEGA support to restore the account.
@@ -12818,6 +12819,15 @@ class MegaApi
          * Valid data in the MegaRequest object received in onRequestFinish when the error code
          * is MegaError::API_OK:
          * - MegaRequest::getEmail - Return the email associated with the link
+         *
+         * The MegaError::API_ESID error code might be returned for this request under certain
+         * circumstances. It should not be taken as an error, since MegaApiImpl will logout the
+         * session after API_ESID is notified – this may happen before the confirmCancelAccount
+         * response is received (@see MegaApiImpl::request_error).
+         *
+         * In case of an automatic logout (ie. when the account become blocked by
+         * ToS infringment), the MegaRequest::getParamType indicates the error that
+         * triggered the automatic logout (MegaError::API_EBLOCKED for the example).
          *
          * @param link Cancellation link sent to the user's email address;
          * @param pwd Password for the account.
