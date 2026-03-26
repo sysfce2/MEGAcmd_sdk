@@ -518,7 +518,11 @@ void setScParserMode(bool isStreamingMode)
             }
             else
             {
-                pendingScRequest->in.insert(1, "\"apm\":1,");
+                if (pendingScRequest->status == REQ_SUCCESS)
+                {
+                    pendingScRequest->in.insert(1, "\"apm\":1,");
+                    pendingScRequest->contentlength += 8;
+                }
             }
         }
     };
