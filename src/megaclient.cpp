@@ -25079,6 +25079,21 @@ void MegaClient::chooseScParsingMode()
         }
         else
         {
+            // If SC parsing streaming mode is changed from false to true, the log of the first
+            // chunk will be missed. Log it here to avoid that. If SC parsing streaming mode is
+            // changed from true to false, the log of the first chunk will be duplicated with the
+            // nonchunk log. But it is acceptable since it is only for debugging. This workaround
+            // will be removed after the SC parsing non-streaming mode is removed.
+            if (!isStreamingEnabled() && pendingsc->status == REQ_INFLIGHT)
+            {
+                JSON_CHUNK_RECEIVED << pendingsc->getLogName() << "Received chunk "
+                                    << pendingsc->size() << ": "
+                                    << MaxDirectMessage(pendingsc->data(),
+                                                        pendingsc->size(),
+                                                        SimpleLogger::getMaxPayloadLogSize())
+                                    << " (at ds: " << Waiter::ds << ")";
+            }
+
             enableStreaming();
         }
     }
