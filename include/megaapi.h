@@ -56,6 +56,40 @@ struct MegaSearchLexicographicalOffset
     std::optional<MegaHandle> mLastHandle{};
 };
 
+/**
+ * @brief Cursor position for cursor-based (keyset) pagination in MegaApi::searchByPage().
+ *
+ * Build this from the last MegaNode returned in the previous page.
+ * The optional sort-key fields that must be populated depend on the sort order:
+ *
+ *   ORDER_DEFAULT_ASC / ORDER_DEFAULT_DESC     : mLastName, mLastType, mLastHandle
+ *   ORDER_SIZE_ASC    / ORDER_SIZE_DESC        : above + mLastSize
+ *   ORDER_MODIFICATION_ASC / _DESC             : above + mLastMtime
+ *   ORDER_LABEL_ASC / ORDER_LABEL_DESC         : mLastName, mLastType, mLastHandle, mLastLabel
+ *   ORDER_FAV_ASC   / ORDER_FAV_DESC           : mLastName, mLastType, mLastHandle, mLastFav
+ *
+ * Example (obtaining cursor from last node on a page):
+ * @code
+ *   MegaNode* last = nodeList->get(nodeList->size() - 1);
+ *   MegaSearchCursorOffset cursor;
+ *   cursor.mLastName   = last->getName();
+ *   cursor.mLastType   = last->getType();
+ *   cursor.mLastHandle = last->getHandle();
+ *   cursor.mLastSize   = last->getSize();   // when using ORDER_SIZE_ASC/DESC
+ * @endcode
+ */
+struct MegaSearchCursorOffset
+{
+    std::string mLastName;
+    int mLastType = 0;
+    MegaHandle mLastHandle = ~(MegaHandle)0; // INVALID_HANDLE
+
+    std::optional<int64_t> mLastSize; ///< For ORDER_SIZE_ASC / ORDER_SIZE_DESC
+    std::optional<int64_t> mLastMtime; ///< For ORDER_MODIFICATION_ASC / ORDER_MODIFICATION_DESC
+    std::optional<int> mLastLabel; ///< For ORDER_LABEL_ASC / ORDER_LABEL_DESC
+    std::optional<int> mLastFav; ///< For ORDER_FAV_ASC / ORDER_FAV_DESC
+};
+
 #ifdef WIN32
     const char MEGA_DEBRIS_FOLDER[] = "Rubbish";
 #else
@@ -20115,6 +20149,87 @@ class MegaApi
          * @return List with found nodes as MegaNode objects
          */
         MegaNodeList* search(const MegaSearchFilter* filter, int order = ORDER_NONE, MegaCancelToken* cancelToken = nullptr, const MegaSearchPage* searchPage = nullptr);
+
+        /**
+         * @brief Search nodes using cursor-based (keyset) pagination across the entire drive.
+         *
+         * Unlike search() which uses offset + size pagination, this method accepts a cursor derived
+         * from the last node returned on the previous page.  This guarantees that no nodes are
+         * skipped or duplicated even when nodes are deleted between page requests.
+         *
+         * Supported sort orders:
+         *   - ORDER_DEFAULT_ASC  / ORDER_DEFAULT_DESC
+         *   - ORDER_SIZE_ASC     / ORDER_SIZE_DESC
+         *   - ORDER_MODIFICATION_ASC / ORDER_MODIFICATION_DESC
+         *   - ORDER_LABEL_ASC    / ORDER_LABEL_DESC
+         *   - ORDER_FAV_ASC      / ORDER_FAV_DESC
+         *
+         * To retrieve subsequent pages, construct a MegaSearchCursorOffset from the last node in
+         * the returned list and pass it as the @p cursor argument.  See MegaSearchCursorOffset for
+         * the fields that must be populated for each sort order.
+         *
+         * The returned list is empty when there are no more results.
+         *
+         * @param filter       Filter criteria (same as search()); must not be null.
+         * @param order        Sort order constant (see above for supported values).
+         * @param cancelToken  Optional cancellation token; may be null.
+         * @param maxElements  Maximum number of nodes to return in one page (0 = no limit).
+         * @param cursor       Cursor from the last node of the previous page, or nullptr for the
+         *                     first page.
+         *
+         * @return List of matching MegaNode objects, or an empty list when there are no more
+         *         results.  The caller takes ownership and must delete the returned object.
+         */
+        MegaNodeList* searchByPage(const MegaSearchFilter* filter,
+                                   int order = ORDER_DEFAULT_ASC,
+                                   MegaCancelToken* cancelToken = nullptr,
+                                   size_t maxElements = 0,
+                                   const MegaSearchCursorOffset* cursor = nullptr);
+
+        /**
+         * @brief List all nodes using cursor-based pagination, with optional MIME type filtering.
+         *
+         * Unlike search() / searchByPage() which traverse a subtree, this method queries the
+         * entire nodes table with a simple flat query.  This makes it significantly faster for
+         * global pagination use-cases.
+         *
+         * Cursor-based pagination guarantees that no items are skipped if nodes are deleted
+         * between page requests, unlike the offset-based search().
+         *
+         * Supported sort orders:
+         *   - ORDER_DEFAULT_ASC  / ORDER_DEFAULT_DESC
+         *   - ORDER_SIZE_ASC     / ORDER_SIZE_DESC
+         *   - ORDER_MODIFICATION_ASC / ORDER_MODIFICATION_DESC
+         *   - ORDER_LABEL_ASC    / ORDER_LABEL_DESC
+         *   - ORDER_FAV_ASC      / ORDER_FAV_DESC
+         *
+         * To build a cursor for the next page, populate a MegaSearchCursorOffset from the last
+         * MegaNode in the returned list.  The fields required depend on the sort order; see
+         * MegaSearchCursorOffset for details.
+         *
+         * For best performance, ensure search DB indexes are enabled (they are by default):
+         * @code
+         *   megaApi->enableSearchDBIndexes(true);
+         * @endcode
+         *
+         * @param order        Sort order constant (see supported values above).
+         *                     Defaults to ORDER_DEFAULT_ASC.
+         * @param cancelToken  Optional cancellation token; may be null.
+         * @param maxElements  Maximum number of nodes to return per page (0 = no limit).
+         * @param cursor       Cursor from the last node of the previous page, or nullptr for the
+         *                     first page.
+         * @param mimeType     MIME type category filter.  Pass MegaApi::FILE_TYPE_DEFAULT (0) to
+         *                     disable MIME filtering.  Supported values mirror MegaSearchFilter's
+         *                     byCategory values (e.g. FILE_TYPE_PHOTO, FILE_TYPE_AUDIO, …).
+         *
+         * @return List of MegaNode objects for this page, or an empty list when there are no more
+         *         results.  The caller takes ownership and must delete the returned object.
+         */
+        MegaNodeList* listAllNodesByPage(int order,
+                                         MegaCancelToken* cancelToken,
+                                         size_t maxElements,
+                                         const MegaSearchCursorOffset* cursor,
+                                         int mimeType);
 
         /**
          * @brief Get a list of buckets, each bucket containing a list of recently added/modified

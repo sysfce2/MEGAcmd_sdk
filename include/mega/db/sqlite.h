@@ -92,6 +92,21 @@ public:
 
     bool searchNodes(const mega::NodeSearchFilter& filter, int order, std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes, CancelToken cancelFlag, const NodeSearchPage& page) override;
 
+    bool searchNodesByPage(const mega::NodeSearchFilter& filter,
+                           int order,
+                           std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes,
+                           CancelToken cancelFlag,
+                           size_t maxElements,
+                           const std::optional<NodeSearchCursorOffset>& cursor) override;
+
+    bool searchNodesByPageWithSnapshot(const mega::NodeSearchFilter& filter,
+                                       int order,
+                                       std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes,
+                                       CancelToken cancelFlag,
+                                       size_t pageOffset,
+                                       size_t pageSize,
+                                       std::string& cacheKey) override;
+
     /*
      * @brief
      * Get all node tags below a specified node.
@@ -141,6 +156,13 @@ public:
 
     void updateCounter(NodeHandle nodeHandle, const std::string& nodeCounterBlob) override;
     void updateCounterAndFlags(NodeHandle nodeHandle, uint64_t flags, const std::string& nodeCounterBlob) override;
+    bool listAllNodesByPage(int order,
+                            std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes,
+                            CancelToken cancelFlag,
+                            size_t maxElements,
+                            const std::optional<NodeSearchCursorOffset>& cursor,
+                            MimeType_t mimeType) override;
+
     void createIndexes(bool enableIndexesForSearching,
                        bool enableIndexesForLexicographicalList) override;
     void dropSearchDBIndexes() override;
@@ -198,6 +220,17 @@ private:
     sqlite3_stmt* mStmtGetChildrenLexi = nullptr;
     sqlite3_stmt* mStmtGetChildrenLexiNoOffset = nullptr;
     std::map<size_t, sqlite3_stmt*> mStmtSearchNodes;
+    std::map<size_t, sqlite3_stmt*> mStmtSearchNodesByPage;
+    std::map<size_t, sqlite3_stmt*> mStmtListAllNodesByPage;
+
+    /// In-memory snapshot used by searchNodesByPageWithSnapshot().
+    struct NodeSearchSnapshot
+    {
+        std::string mKey;
+        std::vector<std::pair<NodeHandle, NodeSerialized>> mAllNodes;
+    };
+
+    std::optional<NodeSearchSnapshot> mSearchSnapshot;
     sqlite3_stmt* mStmtNodeTagsBelow = nullptr;
     sqlite3_stmt* mStmtNodesByFpNoMtime = nullptr;
     sqlite3_stmt* mStmtNodeByFp = nullptr;

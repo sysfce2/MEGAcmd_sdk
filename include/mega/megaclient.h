@@ -2702,7 +2702,7 @@ public:
     // Enable create DB indexes for queries used in search functionality
     // By default is true (reset to default value at locallogout)
     void enableSearchDBIndexes(bool enable);
-    // Enable create DB indexes for queries listing nodes using lexicographical oreder
+    // Enable create DB indexes for queries listing nodes using lexicographical order
     // By default is false (reset to default value at locallogout)
     void enableLexicographicDBIndexes(bool enable);
     // Drop DB indexes for queries used in search functionality

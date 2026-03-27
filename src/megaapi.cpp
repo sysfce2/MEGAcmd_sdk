@@ -4562,6 +4562,32 @@ MegaNodeList* MegaApi::search(const MegaSearchFilter* filter, int order, MegaCan
     return pImpl->search(filter, order, convertToCancelToken(cancelToken), searchPage);
 }
 
+MegaNodeList* MegaApi::searchByPage(const MegaSearchFilter* filter,
+                                    int order,
+                                    MegaCancelToken* cancelToken,
+                                    size_t maxElements,
+                                    const MegaSearchCursorOffset* cursor)
+{
+    return pImpl->searchByPage(filter,
+                               order,
+                               convertToCancelToken(cancelToken),
+                               maxElements,
+                               cursor);
+}
+
+MegaNodeList* MegaApi::listAllNodesByPage(int order,
+                                          MegaCancelToken* cancelToken,
+                                          size_t maxElements,
+                                          const MegaSearchCursorOffset* cursor,
+                                          int mimeType)
+{
+    return pImpl->listAllNodesByPage(order,
+                                     convertToCancelToken(cancelToken),
+                                     maxElements,
+                                     cursor,
+                                     mimeType);
+}
+
 long long MegaApi::getSize(MegaNode *n)
 {
     return pImpl->getSize(n);

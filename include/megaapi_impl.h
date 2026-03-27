@@ -4418,8 +4418,25 @@ public:
 
         MegaNodeList* search(const MegaSearchFilter* filter, int order, CancelToken cancelToken, const MegaSearchPage* searchPage);
 
+        MegaNodeList* searchByPage(const MegaSearchFilter* filter,
+                                   int order,
+                                   CancelToken cancelToken,
+                                   size_t maxElements,
+                                   const MegaSearchCursorOffset* cursor);
+
+        MegaNodeList* listAllNodesByPage(int order,
+                                         CancelToken cancelToken,
+                                         size_t maxElements,
+                                         const MegaSearchCursorOffset* cursor,
+                                         int mimeType);
+
     private:
         sharedNode_vector searchInNodeManager(const MegaSearchFilter* filter, int order, CancelToken cancelToken, const MegaSearchPage* searchPage);
+        sharedNode_vector searchInNodeManagerByPage(const MegaSearchFilter* filter,
+                                                    int order,
+                                                    CancelToken cancelToken,
+                                                    size_t maxElements,
+                                                    const MegaSearchCursorOffset* cursor);
 
     public:
         bool processMegaTree(MegaNode* node, MegaTreeProcessor* processor, bool recursive = 1);
