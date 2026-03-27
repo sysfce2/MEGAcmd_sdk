@@ -29,6 +29,7 @@
  */
 
 #include "integration_test_utils.h"
+#include "mega/testhooks.h"
 #include "mock_listeners.h"
 #include "SdkTest_test.h"
 
@@ -37,6 +38,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <future>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -102,8 +105,12 @@ constexpr int NUM_SET_ELEMENTS_TO_DELETE = 20;
 constexpr int NUM_SETS_TO_DELETE = 2;
 constexpr int NUM_FOLDERS_TO_DELETE = 10;
 
+constexpr int NUM_COPY_FILES = 5000;
+
 // Timeout constants
 constexpr unsigned int AP_WAIT_TIMEOUT_SECONDS = 300; // 5 minutes for massive APs
+
+const char* TEST_FILE_NAME = "test.png";
 
 // Helper to generate unique names
 std::string generateUniqueName(const std::string& prefix, int index)
@@ -376,8 +383,7 @@ protected:
     MegaHandle mTestRootHandle = INVALID_HANDLE;
 
     // Session storage for receiver clients
-    std::unique_ptr<char[]> mSessionReceiver1;
-    std::unique_ptr<char[]> mSessionReceiver2;
+    std::unique_ptr<char[]> mSessionClients[3] = {nullptr};
 
     /**
      * @brief Initialize other sessions, they should login to the same account
@@ -400,6 +406,20 @@ protected:
             ASSERT_TRUE(fetchNodesTracker.waitForFinishOrTimeout(sdk_test::MAX_TIMEOUT))
                 << "[" << i << "] session fetch nodes failed";
         }
+    }
+
+    /**
+     * @brief Create the test root folder
+     */
+    void verifyClientsLogin(const std::string& logPre, const std::vector<unsigned int>& apiIndexes)
+    {
+        for (auto apiIndex: apiIndexes)
+        {
+            ASSERT_TRUE(megaApi[apiIndex]->isLoggedIn())
+                << "Client " << apiIndex << " not logged in";
+        }
+
+        LOG_info << logPre << "All clients logged in successfully";
     }
 
     /**
@@ -1359,22 +1379,107 @@ protected:
     }
 
     /**
+     * @brief Download test file from artifactory and upload it to the test root folder
+     */
+    void downloadAndUploadTestFile()
+    {
+        // Step 1: Download test file from artifactory
+        const std::string testFileName = TEST_FILE_NAME;
+        ASSERT_TRUE(getFileFromArtifactory("test-data/invalid.png", testFileName.c_str()));
+
+        const MrProper defer{[testFileName, this]()
+                             {
+                                 deleteFile(testFileName.c_str());
+                             }};
+
+        // Step 2: Upload to the test root folder
+        std::unique_ptr<MegaNode> testRootNode(
+            megaApi[EXECUTOR_INDEX]->getNodeByHandle(mTestRootHandle));
+        ASSERT_NE(testRootNode, nullptr) << "Test root folder not found";
+
+        TransferTracker uploadTracker(megaApi[EXECUTOR_INDEX].get());
+        MegaUploadOptions uploadOptions;
+        uploadOptions.mtime = ::mega::MegaApi::INVALID_CUSTOM_MOD_TIME;
+        megaApi[EXECUTOR_INDEX]->startUpload(testFileName,
+                                             testRootNode.get(),
+                                             nullptr,
+                                             &uploadOptions,
+                                             &uploadTracker);
+
+        ASSERT_EQ(API_OK, uploadTracker.waitForResult())
+            << "Failed to upload " << testFileName << " to test root folder";
+    }
+
+    /**
+     * @brief Copy massive test files in the test root folder
+     */
+    void copyTestFiles(MegaHandle dstHandle)
+    {
+        LOG_info << "Copying test files in parallel...";
+
+        std::unique_ptr<MegaNode> testRootNode(
+            megaApi[EXECUTOR_INDEX]->getNodeByHandle(mTestRootHandle));
+        ASSERT_NE(testRootNode, nullptr) << "Test root folder not found";
+
+        std::unique_ptr<MegaNode> testFileNode(
+            megaApi[EXECUTOR_INDEX]->getChildNode(testRootNode.get(), TEST_FILE_NAME));
+        ASSERT_NE(testFileNode, nullptr) << TEST_FILE_NAME << " not found in test root folder";
+
+        std::unique_ptr<MegaNode> dstNode(megaApi[EXECUTOR_INDEX]->getNodeByHandle(dstHandle));
+        ASSERT_NE(dstNode, nullptr) << "Test destination folder not found";
+
+        // Fire all copy requests in parallel
+        struct CopyRequest
+        {
+            std::string name;
+            std::unique_ptr<RequestTracker> tracker;
+        };
+
+        std::vector<CopyRequest> requests;
+        requests.reserve(NUM_COPY_FILES);
+
+        for (int i = 0; i < NUM_COPY_FILES; ++i)
+        {
+            char copyName[16];
+            snprintf(copyName, sizeof(copyName), "test%03d.png", i);
+
+            auto tracker = RequestTracker::async(
+                *megaApi[EXECUTOR_INDEX],
+                static_cast<void (
+                    MegaApi::*)(MegaNode*, MegaNode*, const char*, MegaRequestListener*)>(
+                    &MegaApi::copyNode),
+                testFileNode.get(),
+                dstNode.get(),
+                copyName);
+
+            requests.push_back({copyName, std::move(tracker)});
+        }
+
+        // Wait for all copy requests to complete
+        for (auto& req: requests)
+        {
+            int err = req.tracker->waitForResult();
+            ASSERT_EQ(err, API_OK) << "Failed to copy " << TEST_FILE_NAME << " to " << req.name;
+
+            MegaHandle copiedHandle = req.tracker->getNodeHandle();
+            if (copiedHandle != INVALID_HANDLE)
+            {
+                mCreatedFileHandles.push_back(copiedHandle);
+            }
+        }
+
+        LOG_info << "Successfully created massive copies of " << TEST_FILE_NAME << " in parallel";
+    }
+
+    /**
      * @brief Pause receiver clients by saving session and logging out locally
      */
     void pauseReceiverClients()
     {
         LOG_info << "Pausing receiver clients B and C...";
 
-        // Save sessions
-        mSessionReceiver1.reset(dumpSession(RECEIVER1_INDEX));
-        mSessionReceiver2.reset(dumpSession(RECEIVER2_INDEX));
-
-        ASSERT_NE(mSessionReceiver1, nullptr);
-        ASSERT_NE(mSessionReceiver2, nullptr);
-
-        // Local logout to stop receiving action packets
-        ASSERT_EQ(doRequestLocalLogout(RECEIVER1_INDEX), API_OK);
-        ASSERT_EQ(doRequestLocalLogout(RECEIVER2_INDEX), API_OK);
+        pauseClient(RECEIVER1_INDEX);
+        pauseClient(RECEIVER2_INDEX);
 
         LOG_info << "Receiver clients paused";
     }
@@ -1386,15 +1491,8 @@ protected:
     {
         LOG_info << "Resuming receiver clients B and C...";
 
-        ASSERT_NE(mSessionReceiver1, nullptr);
-        ASSERT_NE(mSessionReceiver2, nullptr);
-
-        // Resume sessions - this will trigger fetchnodes and receive all accumulated APs
-        ASSERT_EQ(synchronousFastLogin(RECEIVER1_INDEX, mSessionReceiver1.get()), API_OK);
-        fetchnodes(RECEIVER1_INDEX, AP_WAIT_TIMEOUT_SECONDS);
-
-        ASSERT_EQ(synchronousFastLogin(RECEIVER2_INDEX, mSessionReceiver2.get()), API_OK);
-        fetchnodes(RECEIVER2_INDEX, AP_WAIT_TIMEOUT_SECONDS);
+        resumeClient(RECEIVER1_INDEX);
+        resumeClient(RECEIVER2_INDEX);
 
         LOG_info << "Receiver clients resumed and fetched nodes";
     }
@@ -1402,7 +1500,9 @@ protected:
     /**
      * @brief Wait for all clients to be synchronized
      */
-    void waitForClientsSynchronized()
+    void waitForClientsSynchronized(const std::vector<unsigned int>& apiIndexes = {EXECUTOR_INDEX,
+                                                                                   RECEIVER1_INDEX,
+                                                                                   RECEIVER2_INDEX})
     {
         LOG_info << "Waiting for all clients to synchronize...";
 
@@ -1414,9 +1514,10 @@ protected:
             return rt.waitForResult(AP_WAIT_TIMEOUT_SECONDS) == API_OK;
         };
 
-        ASSERT_TRUE(catchup(EXECUTOR_INDEX)) << "Executor catchup failed";
-        ASSERT_TRUE(catchup(RECEIVER1_INDEX)) << "Receiver1 catchup failed";
-        ASSERT_TRUE(catchup(RECEIVER2_INDEX)) << "Receiver2 catchup failed";
+        for (auto& apiIndex: apiIndexes)
+        {
+            ASSERT_TRUE(catchup(apiIndex)) << "Client " << apiIndex << " catchup failed";
+        }
 
         LOG_info << "All clients synchronized";
     }
@@ -1559,21 +1660,24 @@ protected:
 
         // 1. Verify B and C are consistent
         LOG_info << "Checking consistency between Client B and Client C...";
-        ASSERT_TRUE(compareNodeTrees(RECEIVER1_INDEX, RECEIVER2_INDEX, rootA->getHandle()))
-            << "Node tree mismatch between Client B and Client C";
-        ASSERT_TRUE(compareSets(RECEIVER1_INDEX, RECEIVER2_INDEX))
-            << "Sets mismatch between Client B and Client C";
+        compareClients(RECEIVER1_INDEX, RECEIVER2_INDEX, rootA->getHandle());
         LOG_info << "Client B and Client C are consistent";
 
         // 2. Verify A and B are consistent
         LOG_info << "Checking consistency between Client A and Client B...";
-        ASSERT_TRUE(compareNodeTrees(EXECUTOR_INDEX, RECEIVER1_INDEX, rootA->getHandle()))
-            << "Node tree mismatch between Client A and Client B";
-        ASSERT_TRUE(compareSets(EXECUTOR_INDEX, RECEIVER1_INDEX))
-            << "Sets mismatch between Client A and Client B";
+        compareClients(EXECUTOR_INDEX, RECEIVER1_INDEX, rootA->getHandle());
         LOG_info << "Client A and Client B are consistent";
 
         LOG_info << "All consistency checks passed!";
+    }
+
+    void compareClients(unsigned apiIndex1, unsigned apiIndex2, MegaHandle rootHandle)
+    {
+        ASSERT_TRUE(compareNodeTrees(apiIndex1, apiIndex2, rootHandle))
+            << "Node tree mismatch between Client " << apiIndex1 << " and Client " << apiIndex2;
+        ASSERT_TRUE(compareSets(apiIndex1, apiIndex2))
+            << "Sets mismatch between Client " << apiIndex1 << " and Client " << apiIndex2;
+        LOG_info << "Client " << apiIndex1 << " and Client " << apiIndex2 << " are consistent";
     }
 
     /**
@@ -1588,6 +1692,312 @@ protected:
                  << ", Set elements created: " << mCreatedSetElements.size()
                  << ", Exported nodes: " << mExportedNodeHandles.size()
                  << ", Shared folders: " << mSharedFolderHandles.size();
+    }
+
+    /**
+     * @brief Pause client
+     */
+    void pauseClient(unsigned int apiIndex)
+    {
+        // Save sessions
+        mSessionClients[apiIndex].reset(dumpSession(apiIndex));
+        ASSERT_NE(mSessionClients[apiIndex], nullptr);
+        // Local logout to stop receiving action packets
+        ASSERT_EQ(doRequestLocalLogout(apiIndex), API_OK);
+    }
+
+    /**
+     * @brief Resume client
+     */
+    void resumeClient(unsigned int apiIndex)
+    {
+        ASSERT_NE(mSessionClients[apiIndex], nullptr);
+        ASSERT_EQ(synchronousFastLogin(apiIndex, mSessionClients[apiIndex].get()), API_OK);
+        fetchnodes(apiIndex, AP_WAIT_TIMEOUT_SECONDS);
+    }
+
+    /**
+     * @brief Copy massive test files for massive action packets generation
+     */
+    void copyMassiveTestFiles(const std::string& logPre, MegaHandle dstHandle)
+    {
+        LOG_info
+            << logPre
+            << "Downloading test file from artifactory and uploading it to the test root folder";
+        ASSERT_NO_FATAL_FAILURE(downloadAndUploadTestFile());
+
+        LOG_info << logPre << "Copying test files";
+        ASSERT_NO_FATAL_FAILURE(copyTestFiles(dstHandle));
+    }
+
+    /**
+     * @brief Delay for random time
+     */
+    void randomDelay(const std::string& logPre)
+    {
+        // Random delay to fail AP processing at different points
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<int> dist(0, 5);
+        auto delayMs = dist(gen);
+        LOG_info << logPre << "Network failure thread: delaying " << delayMs
+                 << "ms before injecting failure...";
+        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+    }
+
+    /**
+     * @brief Execute network drop test
+     */
+    void networkDropTest(const std::string& logPre, unsigned int apiIndex)
+    {
+        // Use interceptSCRequest to detect when the SC channel receives an AP.
+        // When the hook fires with actual AP data (JSON object), it signals the network drop
+        // thread.
+        std::promise<void> actionPacketStart;
+        std::future<void> actionPacketStartFuture = actionPacketStart.get_future();
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+        auto origInterceptSCRequest = globalMegaTestHooks.interceptSCRequest;
+        globalMegaTestHooks.interceptSCRequest =
+            [&actionPacketStart, &origInterceptSCRequest](std::unique_ptr<HttpReq>& pendingsc)
+        {
+            if (origInterceptSCRequest)
+            {
+                origInterceptSCRequest(pendingsc);
+            }
+
+            if (*pendingsc->in.c_str() == '{')
+            {
+                // Signal the network drop thread on the first SC response with AP data
+                actionPacketStart.set_value();
+
+                // Restore the hook
+                globalMegaTestHooks.interceptSCRequest = origInterceptSCRequest;
+            }
+        };
+#endif
+
+        // Launch a background thread that waits until a action packet is being processed,
+        // then simulates a network drop.
+        std::thread networkDropThread(
+            [&, this]()
+            {
+                LOG_info << logPre << "Network drop thread: waiting for action packets start...";
+                actionPacketStartFuture.wait();
+
+                randomDelay(logPre);
+
+                LOG_info << logPre << "Simulating network drop on RECEIVER1";
+                megaApi[apiIndex]->retryPendingConnections(true);
+            });
+
+        // Clear previous EVENT_NODES_CURRENT before triggering SC channel,
+        // so we can detect when action packets are fully up to date after recovery.
+        mApi[apiIndex].resetlastEvent();
+
+        LOG_info << logPre << "Resuming receiver client...";
+        resumeClient(apiIndex);
+
+        networkDropThread.join();
+
+        LOG_info << logPre << "Waiting for Client " << apiIndex
+                 << " action packets to be up to date...";
+        ASSERT_TRUE(WaitFor(
+            [&, this]()
+            {
+                return mApi[apiIndex].lastEventsContain(MegaEvent::EVENT_NODES_CURRENT);
+            },
+            AP_WAIT_TIMEOUT_SECONDS * 1000))
+            << "Timeout expired waiting for Client " << apiIndex
+            << " action packets to be up to date";
+        LOG_info << logPre << "Client " << apiIndex << " action packets are up to date";
+    }
+
+    /**
+     * @brief Execute network block test
+     */
+    void networkBlockTest(MegaClient* client, const std::string& logPre, unsigned int apiIndex)
+    {
+        std::promise<void> actionPacketStart;
+        std::future<void> actionPacketStartFuture = actionPacketStart.get_future();
+        std::atomic<bool> actionPacketStartSignaled{false};
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+        auto origInterceptSCRequest = globalMegaTestHooks.interceptSCRequest;
+        globalMegaTestHooks.interceptSCRequest = [&](std::unique_ptr<HttpReq>& pendingsc)
+        {
+            if (origInterceptSCRequest)
+            {
+                origInterceptSCRequest(pendingsc);
+            }
+
+            if (*pendingsc->in.c_str() == '{')
+            {
+                client->megaTestHooks.interceptSCChunk = nullptr;
+
+                if (!actionPacketStartSignaled.exchange(true))
+                {
+                    // Signal that AP processing has started
+                    actionPacketStart.set_value();
+                }
+            }
+        };
+#endif
+
+        // Launch a background thread that waits until AP processing starts,
+        // then keeps the network blocked until AP timeout, and finally unblocks.
+        std::thread networkBlockThread(
+            [&]()
+            {
+                LOG_info << logPre << "Network block thread: waiting for action packets start...";
+                actionPacketStartFuture.wait();
+
+                randomDelay(logPre);
+
+                // Block the network
+                LOG_info << logPre << "Network block thread: network is now blocked";
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+                client->megaTestHooks.interceptSCChunk = [](std::unique_ptr<HttpReq>& pendingsc)
+                {
+                    // Clear SC response data to simulate network block. The SDK will see empty
+                    // responses and eventually time out.
+                    LOG_info << "Network block interceptor: clearing SC response data";
+                    pendingsc->status = REQ_INFLIGHT;
+                    pendingsc->notifiedbufpos = pendingsc->bufpos;
+                };
+#endif
+            });
+
+        // Clear previous EVENT_NODES_CURRENT before triggering SC channel
+        mApi[apiIndex].resetlastEvent();
+
+        LOG_info << logPre << "Resuming receiver client...";
+        resumeClient(apiIndex);
+
+        networkBlockThread.join();
+
+        LOG_info << logPre << "Waiting for Client " << apiIndex
+                 << " action packets to be up to date...";
+        ASSERT_TRUE(WaitFor(
+            [&, this]()
+            {
+                return mApi[apiIndex].lastEventsContain(MegaEvent::EVENT_NODES_CURRENT);
+            },
+            AP_WAIT_TIMEOUT_SECONDS * 1000))
+            << "Timeout expired waiting for Client " << apiIndex
+            << " action packets to be up to date";
+        LOG_info << logPre << "Client " << apiIndex << " action packets are up to date";
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+        globalMegaTestHooks.interceptSCRequest = origInterceptSCRequest;
+        client->megaTestHooks.interceptSCChunk = nullptr;
+#endif
+    }
+
+    /**
+     * @brief Execute network failure test
+     *
+     * Simulates a network failure (REQ_FAILURE) while the streaming receiver is processing
+     * action packets. After detecting that AP data has started arriving, a random delay is
+     * applied, then the hook forces pendingsc->status to REQ_FAILURE. The SDK should handle
+     * this by resetting pendingsc, clearing the streaming parser, backing off, and retrying.
+     * Eventually all action packets should be processed correctly.
+     */
+    void networkFailureTest(MegaClient* client, const std::string& logPre, unsigned int apiIndex)
+    {
+        std::promise<void> actionPacketStart;
+        std::future<void> actionPacketStartFuture = actionPacketStart.get_future();
+        std::atomic<bool> actionPacketStartSignaled{false};
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+        auto origInterceptSCRequest = globalMegaTestHooks.interceptSCRequest;
+        globalMegaTestHooks.interceptSCRequest = [&](std::unique_ptr<HttpReq>& pendingsc)
+        {
+            if (origInterceptSCRequest)
+            {
+                origInterceptSCRequest(pendingsc);
+            }
+
+            if (*pendingsc->in.c_str() == '{')
+            {
+                if (!actionPacketStartSignaled.exchange(true))
+                {
+                    // Signal that AP processing has started
+                    actionPacketStart.set_value();
+                }
+            }
+        };
+#endif
+
+        // Launch a background thread that waits until AP processing starts,
+        // then injects a network failure after a random delay.
+        std::thread networkFailureThread(
+            [&]()
+            {
+                LOG_info << logPre << "Network failure thread: waiting for action packets start...";
+                actionPacketStartFuture.wait();
+
+                randomDelay(logPre);
+
+                // Inject network failure
+                LOG_info << logPre << "Network failure thread: injecting REQ_FAILURE";
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+                client->megaTestHooks.interceptSCChunk =
+                    [client](std::unique_ptr<HttpReq>& pendingsc)
+                {
+                    LOG_info << "Network failure interceptor: forcing REQ_FAILURE";
+                    pendingsc->status = REQ_FAILURE;
+                    pendingsc->httpstatus = 0;
+                    // Clear the hook after firing once so the SDK can recover on retry
+                    client->megaTestHooks.interceptSCChunk = nullptr;
+                };
+#endif
+            });
+
+        // Clear previous EVENT_NODES_CURRENT before triggering SC channel
+        mApi[apiIndex].resetlastEvent();
+
+        LOG_info << logPre << "Resuming receiver client...";
+        resumeClient(apiIndex);
+
+        networkFailureThread.join();
+
+        LOG_info << logPre << "Waiting for Client " << apiIndex
+                 << " action packets to be up to date...";
+        ASSERT_TRUE(WaitFor(
+            [&, this]()
+            {
+                return mApi[apiIndex].lastEventsContain(MegaEvent::EVENT_NODES_CURRENT);
+            },
+            AP_WAIT_TIMEOUT_SECONDS * 1000))
+            << "Timeout expired waiting for Client " << apiIndex
+            << " action packets to be up to date";
+        LOG_info << logPre << "Client " << apiIndex << " action packets are up to date";
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+        globalMegaTestHooks.interceptSCRequest = origInterceptSCRequest;
+        client->megaTestHooks.interceptSCChunk = nullptr;
+#endif
+    }
+
+    /**
+     * @brief Post processing for network drop test
+     */
+    void verifyClientsConsistency(const std::string& logPre,
+                                  const std::vector<unsigned int>& apiIndexes)
+    {
+        LOG_info << logPre << "Verifying consistency between clients...";
+        std::unique_ptr<MegaNode> rootA(megaApi[EXECUTOR_INDEX]->getRootNode());
+        ASSERT_NE(rootA, nullptr);
+
+        for (auto& apiIndex: apiIndexes)
+        {
+            compareClients(EXECUTOR_INDEX, apiIndex, rootA->getHandle());
+        }
+
+        LOG_info << logPre << "All consistency checks passed!";
     }
 };
 
@@ -1738,4 +2148,197 @@ TEST_F(SdkTestMassiveActionPackets, DISABLED_IncrementalActionPacketsProcessing)
     ASSERT_NO_FATAL_FAILURE(verifyClientConsistency());
 
     LOG_info << logPre << "=== Incremental Action Packets Test PASSED ===";
+}
+
+/**
+ * @brief Test: Massive Action Packets Processing with Network Drop
+ *
+ * This test generates approximately 1000+ action packets through node copy operations,
+ * then simulates a random network drop while the streaming receiver is
+ * processing APs. After the drop, the SDK should reconnect and send an SC POST with
+ * the latest ISN (interim sequence number) received before the drop as the sn= parameter.
+ */
+TEST_F(SdkTestMassiveActionPackets, MassiveActionPacketsProcessingWithNetworkDrop)
+{
+    CASE_info << "started";
+
+    const std::string logPre = getLogPrefix();
+
+    // Run in action packet streaming parsing mode
+    sdk_test::setScParserMode(true);
+
+    // Verify all clients are logged in
+    ASSERT_NO_FATAL_FAILURE(verifyClientsLogin(logPre, {EXECUTOR_INDEX, RECEIVER1_INDEX}));
+
+    // Create test root folder before pausing receiver
+    ASSERT_NO_FATAL_FAILURE(createTestRootFolder());
+
+    // Pause receiver client to accumulate action packets
+    ASSERT_NO_FATAL_FAILURE(pauseClient(RECEIVER1_INDEX));
+
+    // Generate action packets
+    ASSERT_NO_FATAL_FAILURE(copyMassiveTestFiles(logPre, mTestRootHandle));
+
+    // Resume client and trigger network drop during AP processing
+    ASSERT_NO_FATAL_FAILURE(networkDropTest(logPre, RECEIVER1_INDEX));
+
+    ASSERT_NO_FATAL_FAILURE(verifyClientsConsistency(logPre, {RECEIVER1_INDEX}));
+
+    sdk_test::resetScParserMode();
+
+    CASE_info << "finished";
+}
+
+/**
+ * @brief Test: Single Large Action Packet Processing withNetworkDrop
+ *
+ * This test prepares a folder containing massive file copies, then pauses the receiver,
+ * copies the entire folder to a new location (generating massive APs from a single
+ * copy operation), and simulates a network drop while the receiver processes APs.
+ */
+TEST_F(SdkTestMassiveActionPackets, SingleLargeActionPacketsProcessingWithNetworkDrop)
+{
+    CASE_info << "started";
+
+    const std::string logPre = getLogPrefix();
+
+    // Run in action packet streaming parsing mode
+    sdk_test::setScParserMode(true);
+
+    // Verify all clients are logged in
+    ASSERT_NO_FATAL_FAILURE(verifyClientsLogin(logPre, {EXECUTOR_INDEX, RECEIVER1_INDEX}));
+
+    // Create test root folder before pausing receiver
+    ASSERT_NO_FATAL_FAILURE(createTestRootFolder());
+
+    // Create 2 subfolders and make massive copies of the test file inside one of them
+    LOG_info << logPre << "Creating source folder with massive file copies";
+    std::unique_ptr<MegaNode> testRootNode(
+        megaApi[EXECUTOR_INDEX]->getNodeByHandle(mTestRootHandle));
+    ASSERT_NE(testRootNode, nullptr);
+
+    MegaHandle srcFolderHandle = createFolder(EXECUTOR_INDEX, "SrcFolder", testRootNode.get());
+    ASSERT_NE(srcFolderHandle, INVALID_HANDLE) << "Failed to create SrcFolder";
+
+    MegaHandle dstFolderHandle = createFolder(EXECUTOR_INDEX, "DstFolder", testRootNode.get());
+    ASSERT_NE(dstFolderHandle, INVALID_HANDLE) << "Failed to create DstFolder";
+
+    // Prepare massive test files inside SrcFolder
+    ASSERT_NO_FATAL_FAILURE(copyMassiveTestFiles(logPre, srcFolderHandle));
+
+    LOG_info << logPre << "Waiting for clients to synchronize...";
+    ASSERT_NO_FATAL_FAILURE(waitForClientsSynchronized({EXECUTOR_INDEX, RECEIVER1_INDEX}));
+
+    // Pause receiver client to accumulate action packets
+    ASSERT_NO_FATAL_FAILURE(pauseClient(RECEIVER1_INDEX));
+
+    // Generate action packets
+    LOG_info << logPre << "Copying source folder to destination (generating massive APs)";
+
+    std::unique_ptr<MegaNode> srcFolderNode(
+        megaApi[EXECUTOR_INDEX]->getNodeByHandle(srcFolderHandle));
+    ASSERT_NE(srcFolderNode, nullptr);
+    std::unique_ptr<MegaNode> dstFolderNode(
+        megaApi[EXECUTOR_INDEX]->getNodeByHandle(dstFolderHandle));
+    ASSERT_NE(dstFolderNode, nullptr);
+
+    MegaHandle copiedFolderHandle = INVALID_HANDLE;
+    int err = doCopyNode(EXECUTOR_INDEX,
+                         &copiedFolderHandle,
+                         srcFolderNode.get(),
+                         dstFolderNode.get(),
+                         "SrcFolderCopy");
+    ASSERT_EQ(err, API_OK) << "Failed to copy source folder";
+    ASSERT_NE(copiedFolderHandle, INVALID_HANDLE);
+    LOG_info << logPre << "Folder copy completed";
+
+    // Resume client and trigger network drop during AP processing
+    ASSERT_NO_FATAL_FAILURE(networkDropTest(logPre, RECEIVER1_INDEX));
+
+    ASSERT_NO_FATAL_FAILURE(verifyClientsConsistency(logPre, {RECEIVER1_INDEX}));
+
+    sdk_test::resetScParserMode();
+
+    CASE_info << "finished";
+}
+
+/**
+ * @brief Test: Massive Action Packets Processing with Network Block
+ *
+ * This test generates massive action packets through node copy operations,
+ * then simulates a network block (SC responses are cleared) while the streaming receiver
+ * is processing APs. The block is held long enough to trigger the AP timeout. After the
+ * timeout, the SDK should reconnect and resume processing with the correct ISN.
+ */
+TEST_F(SdkTestMassiveActionPackets, MassiveActionPacketsProcessingWithNetworkBlock)
+{
+    CASE_info << "started";
+
+    const std::string logPre = getLogPrefix();
+
+    // Run in action packet streaming parsing mode
+    sdk_test::setScParserMode(true);
+
+    // Verify all clients are logged in
+    ASSERT_NO_FATAL_FAILURE(verifyClientsLogin(logPre, {EXECUTOR_INDEX, RECEIVER1_INDEX}));
+
+    // Create test root folder before pausing receiver
+    ASSERT_NO_FATAL_FAILURE(createTestRootFolder());
+
+    // Pause receiver client to accumulate action packets
+    ASSERT_NO_FATAL_FAILURE(pauseClient(RECEIVER1_INDEX));
+
+    // Generate action packets
+    ASSERT_NO_FATAL_FAILURE(copyMassiveTestFiles(logPre, mTestRootHandle));
+
+    // Resume client and trigger network block during AP processing
+    ASSERT_NO_FATAL_FAILURE(
+        networkBlockTest(megaApi[RECEIVER1_INDEX]->getClient(), logPre, RECEIVER1_INDEX));
+
+    ASSERT_NO_FATAL_FAILURE(verifyClientsConsistency(logPre, {RECEIVER1_INDEX}));
+
+    sdk_test::resetScParserMode();
+
+    CASE_info << "finished";
+}
+
+/**
+ * @brief Test: Massive Action Packets Processing with Network Failure
+ *
+ * This test generates massive action packets through node copy operations,
+ * then simulates a network failure (REQ_FAILURE) while the streaming receiver
+ * is processing APs. The SDK should handle this by resetting the SC connection,
+ * backing off, and retrying. After recovery, all action packets should be
+ * processed correctly with the right ISN.
+ */
+TEST_F(SdkTestMassiveActionPackets, MassiveActionPacketsProcessingWithNetworkFailure)
+{
+    CASE_info << "started";
+
+    const std::string logPre = getLogPrefix();
+
+    // Run in action packet streaming parsing mode
+    sdk_test::setScParserMode(true);
+
+    // Verify all clients are logged in
+    ASSERT_NO_FATAL_FAILURE(verifyClientsLogin(logPre, {EXECUTOR_INDEX, RECEIVER1_INDEX}));
+
+    // Create test root folder before pausing receiver
+    ASSERT_NO_FATAL_FAILURE(createTestRootFolder());
+
+    // Pause receiver client to accumulate action packets
+    ASSERT_NO_FATAL_FAILURE(pauseClient(RECEIVER1_INDEX));
+
+    // Generate action packets
+    ASSERT_NO_FATAL_FAILURE(copyMassiveTestFiles(logPre, mTestRootHandle));
+
+    // Resume client and trigger network failure during AP processing
+    ASSERT_NO_FATAL_FAILURE(
+        networkFailureTest(megaApi[RECEIVER1_INDEX]->getClient(), logPre, RECEIVER1_INDEX));
+
+    ASSERT_NO_FATAL_FAILURE(verifyClientsConsistency(logPre, {RECEIVER1_INDEX}));
+
+    sdk_test::resetScParserMode();
+
+    CASE_info << "finished";
 }

@@ -232,7 +232,7 @@ TEST_F(ScStreamingParserTest, ProcessWithSeqTagNotPresent)
 TEST_F(ScStreamingParserTest, ProcessChunks)
 {
     std::string json =
-        R"({"a":[{"a":"ua","st":"!?>VwgM","u":"k-N5-o6LLkE","ua":["^!stbmp"],"v":["Gt-009Sr-XA"]}],"w":"https://g.api.)";
+        R"({"a":[{"a":"ua","isn":"xyp4UX7xFZ4","st":"!?>AmY:","u":"MOte1pKQgDI","ua":["^!prd"],"v":["Dvh72Rs7JBM"]},{"a":"ua","st":"!?>VwgM","u":"k-N5-o6LLkE","ua":["^!stbmp"],"v":["Gt-009Sr-XA"]}],"w":"https://g.api.)";
 
     scStreamingParser->init();
 
@@ -245,7 +245,11 @@ TEST_F(ScStreamingParserTest, ProcessChunks)
     ASSERT_FALSE(scStreamingParser->isFailed());
     ASSERT_FALSE(scStreamingParser->isPaused());
     ASSERT_TRUE(client->scnotifyurl.empty());
-    ASSERT_FALSE(client->scsn.ready());
+
+    const char* isn = "xyp4UX7xFZ4";
+    handle isnHdl;
+    Base64::atob(isn, (byte*)&isnHdl, sizeof(isnHdl));
+    ASSERT_TRUE(client->scsn.getHandle() == isnHdl);
 
     // Purge
     json.erase(0, consumed);
@@ -259,6 +263,80 @@ TEST_F(ScStreamingParserTest, ProcessChunks)
                         jsonRemained,
                         "https://g.api.mega.co.nz/wsc/5lhYq8nqzgIEE8j9OqymmA",
                         "Gt-009Sr-XA");
+}
+
+TEST_F(ScStreamingParserTest, ProcessChunksByMove)
+{
+    initNodes();
+
+    std::string jsonCreate =
+        R"({"a":[{"a":"t","st":"!G(<Cq+","t":{"f":[{"h":"i4om2BrJ","t":1,"a":"k8mDAq0-TfskLMyMqcxssQ","k":"vN8A0kvxmC0:cXtlV5RG0QHpBxl-sZWQxA","p":"Ll5VkSJZ","ts":1770364711,"u":"vN8A0kvxmC0","i":0}]},"ou":"vN8A0kvxmC0"}, {"a":"t","st":"!G(<IS$","t":{"f":[{"h":"HtpQjbba","t":1,"a":"STYGCigAjt9fSXwkPSYxVA","k":"vN8A0kvxmC0:3BrxInvwc6gysUP-NmZ8Fg","p":"Ll5VkSJZ","ts":1770364718,"u":"vN8A0kvxmC0","i":0}]},"ou":"vN8A0kvxmC0"}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"JcnE8wc8Xz0"})";
+    std::string jsonMovePart1 =
+        R"({"a":[{"a":"d","isn":"xyp4UX7xFZ4","i":"fbtekrfnlb","st":"!G(<L_j","n":"i4om2BrJ","m":1,"ou":"vN8A0kvxmC0"},)";
+    std::string jsonMovePart2 =
+        R"({"a":"t","i":"fbtekrfnlb","t":{"f":[{"h":"i4om2BrJ","p":"HtpQjbba","u":"vN8A0kvxmC0","t":1,"a":"k8mDAq0-TfskLMyMqcxssQ","k":"vN8A0kvxmC0:cXtlV5RG0QHpBxl-sZWQxA","ts":1770364711}],"u":[{"u":"vN8A0kvxmC0","m":"jye+test3@mega.co.nz","m2":["jye+test3@mega.co.nz"],"pubk":"CADLwMeFsNUFHY5vIHrDF73XMk6lZvRPQlhh67NGgg8WdiZF7vtM4HrCoftYvQEFLM-JF498dEFLNo9f76KydgWSdl_IEFT4KpnuexvJpfwI0eyJRzU1Wt5wegWJw9WPEKxpHGP91VllLPWB31X2FH48angXw9Mf_3nyjNh-q83tMEbT5XEWuL3KqiMdP80XeqJk3TOuCcaSmq5tzj84rzc1sNnsoNkgYPYuGjOqzA8VzURVU6Tp7BV2eJm0x68dCwoJMHiZVNor1fz0I-iB1Vj2Hurr1NmIGLP9AEJOSKE1iwBSmseTOci3KaLcMrwy1rQMx8r9y-KV5eBnt7kPRSCdACAAAAEB","+puCu255":"dLFE7BT0zCf3Q2f0EXVGRUZRtVuY0J_TPZVMkhAI3Hs","+puEd255":"owpFu55NPN4Y93GX8-iDVcbmktEvd-LcYtgMJUILLxU","+sigCu255":"AAAAAGj5nvcOQZQogXSCNe7RkRLP21nkWcr3D3zx2zY0xC0BqY5_Ny_O1JMaN95YtbkO8dgcYFGiHaW1CWnu9njDcGtnKm8A","+sigPubk":"AAAAAGj5nvgwEi2YXMbNhHdsV1IDYs62RzF1p60M4PkVxXx68HGqF7nBQSg69KUbh_yydf36nneGFMm-7UnKr_yZyFei2wsD"}]},"ou":"vN8A0kvxmC0"}],)";
+    std::string jsonMovePart3 =
+        R"("w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"YydQMr-woLo"})";
+
+    scStreamingParser->init();
+
+    // Create 2 folder
+    testFinishedProcess(scStreamingParser,
+                        *client.get(),
+                        jsonCreate,
+                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
+                        "JcnE8wc8Xz0");
+
+    // Clear for next process
+    scStreamingParser->clear();
+
+    // Process "d" part
+    std::string jsonMove = jsonMovePart1;
+
+    size_t consumed = (size_t)scStreamingParser->process(jsonMove.c_str());
+
+    ASSERT_TRUE(consumed > 0);
+    ASSERT_TRUE(scStreamingParser->hasStarted());
+    ASSERT_FALSE(scStreamingParser->isFinished());
+    ASSERT_FALSE(scStreamingParser->isFailed());
+    ASSERT_FALSE(scStreamingParser->isPaused());
+
+    // isn is received, but is not stored yet.
+    const char* sn = "JcnE8wc8Xz0";
+    handle snHdl;
+    Base64::atob(sn, (byte*)&snHdl, sizeof(snHdl));
+    ASSERT_TRUE(client->scsn.getHandle() == snHdl);
+
+    // Purge
+    jsonMove.erase(0, consumed);
+
+    // Process "t" part
+    jsonMove += jsonMovePart2;
+
+    consumed = (size_t)scStreamingParser->process(jsonMove.c_str());
+
+    ASSERT_TRUE(consumed > 0);
+    ASSERT_TRUE(scStreamingParser->hasStarted());
+    ASSERT_FALSE(scStreamingParser->isFinished());
+    ASSERT_FALSE(scStreamingParser->isFailed());
+    ASSERT_FALSE(scStreamingParser->isPaused());
+
+    const char* isn = "xyp4UX7xFZ4";
+    handle isnHdl;
+    Base64::atob(isn, (byte*)&isnHdl, sizeof(isnHdl));
+    ASSERT_TRUE(client->scsn.getHandle() == isnHdl);
+
+    // Purge
+    jsonMove.erase(0, consumed);
+
+    // Process the remained
+    jsonMove += jsonMovePart3;
+
+    testFinishedProcess(scStreamingParser,
+                        *client.get(),
+                        jsonMove,
+                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
+                        "YydQMr-woLo");
 }
 
 TEST_F(ScStreamingParserTest, ProcessAndPause)

@@ -42,6 +42,7 @@
 #include "setandelement.h"
 #include "sharenodekeys.h"
 #include "sync.h"
+#include "testhooks.h"
 #include "transfer.h"
 #include "transferstats.h"
 #include "treeproc.h"
@@ -1901,6 +1902,7 @@ public:
 
     // server-client command processing
     void sc_storeSn(JSON& json);
+    void sc_purge();
     void sc_procEoo(std::unique_lock<recursive_mutex>& nodeTreeIsChanging, bool originalAC);
     // process an action packet
     bool sc_procActionPacket(JSON& json, std::shared_ptr<Node>& lastAPDeletedNode);
@@ -3610,6 +3612,10 @@ public:
 
     // FUSE service.
     fuse::Service mFuseService;
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+    MegaTestHooks megaTestHooks;
+#endif
 
 private:
 #ifdef ENABLE_SYNC
