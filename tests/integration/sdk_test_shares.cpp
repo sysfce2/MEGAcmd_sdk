@@ -2,6 +2,8 @@
 
 #include "env_var_accounts.h"
 
+#include <memory>
+
 void SdkTestShares::SetUp()
 {
     SdkTest::SetUp();
@@ -693,11 +695,11 @@ TEST_F(SdkTestShares, SdkTestShares)
 
     // --- Download authorized node from another account ---
 
-    MegaNode* nNoAuth = megaApi[0]->getNodeByHandle(hfile1);
+    std::unique_ptr<MegaNode> nNoAuth{megaApi[0]->getNodeByHandle(hfile1)};
 
     int transferError =
         doStartDownload(1,
-                        nNoAuth,
+                        nNoAuth.get(),
                         "unauthorized_node",
                         nullptr /*customName*/,
                         nullptr /*appData*/,
@@ -707,18 +709,15 @@ TEST_F(SdkTestShares, SdkTestShares)
                         MegaTransfer::COLLISION_RESOLUTION_NEW_WITH_N /* collisionResolution */,
                         false /*undelete*/);
 
-    bool hasFailed = (transferError != API_OK);
-    ASSERT_TRUE(hasFailed)
+    ASSERT_TRUE(transferError != API_OK)
         << "Download of node without authorization successful! (it should fail): " << transferError;
-
-    MegaNode* nAuth = megaApi[0]->authorizeNode(nNoAuth);
 
     // make sure target download file doesn't already exist:
     deleteFile("authorized_node");
 
     transferError =
         doStartDownload(1,
-                        nAuth,
+                        megaApi[0]->authorizeNode(nNoAuth.get()),
                         "authorized_node",
                         nullptr /*customName*/,
                         nullptr /*appData*/,
@@ -730,8 +729,6 @@ TEST_F(SdkTestShares, SdkTestShares)
 
     ASSERT_EQ(API_OK, transferError)
         << "Cannot download authorized node (error: " << mApi[1].lastError << ")";
-    delete nNoAuth;
-    delete nAuth;
 
     // Create contact to share
     ASSERT_NO_FATAL_FAILURE(createNewContactAndVerify());
@@ -1217,14 +1214,13 @@ TEST_F(SdkTestShares, SdkTestShares)
 
     // check the corresponding user alert
     {
-        MegaUserAlertList* list = megaApi[1]->getUserAlerts();
+        std::unique_ptr<MegaUserAlertList> list{megaApi[1]->getUserAlerts()};
         ASSERT_TRUE(list->size() > 0);
         MegaUserAlert* a = list->get(list->size() - 1);
         ASSERT_STRCASEEQ(a->getTitle(),
                          ("Access to folders shared by " + mApi[0].email + " was removed").c_str());
         ASSERT_STRCASEEQ(a->getPath(), (mApi[0].email + ":sharedfolder").c_str());
         ASSERT_NE(a->getNodeHandle(), UNDEF);
-        delete list;
     }
 
     auto nodeCountAfterRevokedSharesAccess = megaApi[1]->getAccurateNumNodes();
@@ -1339,7 +1335,7 @@ TEST_F(SdkTestShares, SdkTestShares)
 
     auto importHandle = SdkTest::importPublicLink(0, nodelink4, rootnode.get());
 
-    MegaNode* nimported = megaApi[0]->getNodeByHandle(importHandle);
+    std::unique_ptr<MegaNode> nimported{megaApi[0]->getNodeByHandle(importHandle)};
 
     ASSERT_STREQ(nfile1->getName(), nimported->getName()) << "Imported file with wrong name";
     ASSERT_EQ(rootnode->getHandle(), nimported->getParentHandle()) << "Imported file in wrong path";
@@ -1357,29 +1353,12 @@ TEST_F(SdkTestShares, SdkTestShares)
     nfile1 = std::unique_ptr<MegaNode>{megaApi[0]->getNodeByHandle(removedLinkHandle)};
     ASSERT_FALSE(nfile1->isPublic()) << "Public link removal failed (still public)";
 
-    delete nimported;
-
     // --- Create a folder public link ---
-
-    std::unique_ptr<MegaNode> nfolder1(megaApi[0]->getNodeByHandle(hfolder1));
-
-    string nodelink5 = createPublicLink(0,
-                                        nfolder1.get(),
-                                        0,
-                                        maxTimeout,
-                                        mApi[0].accountDetails->getProLevel() == 0);
-    // The created link is stored in this->link at onRequestFinish()
-
-    // Get a fresh snapshot of the node and check it's actually exported
-    nfolder1.reset(megaApi[0]->getNodeByHandle(hfolder1));
-    ASSERT_TRUE(nfolder1->isExported()) << "Node is not exported, must be exported";
-    ASSERT_FALSE(nfolder1->isTakenDown()) << "Public link is taken down, it mustn't";
-
-    nfolder1.reset(megaApi[0]->getNodeByHandle(hfolder1));
-    ASSERT_STREQ(nodelink5.c_str(), std::unique_ptr<char[]>(nfolder1->getPublicLink()).get())
-        << "Wrong public link from MegaNode";
+    string nodelink5;
+    createOnePublicLink(hfolder1, nodelink5);
 
     // Make sure that search functionality finds it
+    std::unique_ptr<MegaNode> nfolder1(megaApi[0]->getNodeByHandle(hfolder1));
     filterResults.reset(MegaSearchFilter::createInstance());
     filterResults->byName(nfolder1->getName());
     filterResults->byLocation(MegaApi::SEARCH_TARGET_PUBLICLINK);
@@ -1388,54 +1367,8 @@ TEST_F(SdkTestShares, SdkTestShares)
     ASSERT_EQ(foundByLink->size(), 1);
     ASSERT_EQ(foundByLink->get(0)->getHandle(), nfolder1->getHandle());
 
-    // Regenerate the same link should not trigger a new request
-    string nodelink6 = createPublicLink(0,
-                                        nfolder1.get(),
-                                        0,
-                                        maxTimeout,
-                                        mApi[0].accountDetails->getProLevel() == 0);
-    ASSERT_STREQ(nodelink5.c_str(), nodelink6.c_str()) << "Wrong public link after link update";
-
     // --- Import folder public link ---
-    const auto [email, pass] = getEnvVarAccounts().getVarValues(2);
-    ASSERT_FALSE(email.empty() || pass.empty());
-    mApi.resize(3);
-    megaApi.resize(3);
-    configureTestInstance(2, email, pass);
-    auto loginFolderTracker = asyncRequestLoginToFolder(2, nodelink6.c_str());
-    ASSERT_EQ(loginFolderTracker->waitForResult(), API_OK)
-        << "Failed to login to folder " << nodelink6;
-    ASSERT_NO_FATAL_FAILURE(fetchnodes(2));
-    std::unique_ptr<MegaNode> folderNodeToImport(megaApi[2]->getRootNode());
-    ASSERT_TRUE(folderNodeToImport)
-        << "Failed to get folder node to import from link " << nodelink6;
-    std::unique_ptr<MegaNode> authorizedFolderNode(
-        megaApi[2]->authorizeNode(folderNodeToImport.get()));
-    ASSERT_TRUE(authorizedFolderNode) << "Failed to authorize folder node from link " << nodelink6;
-    ASSERT_TRUE(authorizedFolderNode->getChildren())
-        << "Authorized folder node children list is null but it should not";
-    ASSERT_EQ(megaApi[2]->getNumChildren(folderNodeToImport.get()),
-              authorizedFolderNode->getChildren()->size())
-        << "Different number of child nodes after authorizing the folder node";
-    logout(2, false, 20);
-
-    auto loginTracker = asyncRequestLogin(2, email.c_str(), pass.c_str());
-    ASSERT_EQ(loginTracker->waitForResult(), API_OK) << "Failed to login with " << email;
-    ASSERT_NO_FATAL_FAILURE(fetchnodes(2));
-    std::unique_ptr<MegaNode> rootNode2(megaApi[2]->getRootNode());
-    RequestTracker nodeCopyTracker(megaApi[2].get());
-    megaApi[2]->copyNode(authorizedFolderNode.get(), rootNode2.get(), nullptr, &nodeCopyTracker);
-    EXPECT_EQ(nodeCopyTracker.waitForResult(), API_OK) << "Failed to copy node to import";
-    std::unique_ptr<MegaNode> importedNode(
-        megaApi[2]->getNodeByPath(authorizedFolderNode->getName(), rootNode2.get()));
-    EXPECT_TRUE(importedNode) << "Imported node not found";
-    std::unique_ptr<MegaNode> authorizedImportedNode(megaApi[2]->authorizeNode(importedNode.get()));
-    EXPECT_TRUE(authorizedImportedNode) << "Failed to authorize imported node";
-    EXPECT_TRUE(authorizedImportedNode->getChildren())
-        << "Authorized imported node children list is null but it should not";
-    ASSERT_EQ(authorizedFolderNode->getChildren()->size(),
-              authorizedImportedNode->getChildren()->size())
-        << "Not all child nodes have been imported";
+    ASSERT_NO_FATAL_FAILURE(importPublicLink(nodelink5));
 }
 
 /**
@@ -1646,4 +1579,187 @@ TEST_F(SdkTestShares, SdkTestShares2)
     std::unique_ptr<MegaNode> nremoved{
         megaApi[1]->getNodeByHandle(hfile2)}; // get an updated version of the node
     ASSERT_EQ(nremoved, nullptr) << " Failed to see the file was removed";
+}
+
+TEST_F(SdkTestShares, SdkTestShareKeys)
+{
+    LOG_info << "___TEST ShareKeys___";
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(3));
+
+    // make sure users B and C have no inshares (since before this test was started)
+    for (unsigned apiIdx = 1; apiIdx <= 2; ++apiIdx)
+    {
+        unique_ptr<MegaShareList> inShares(megaApi[apiIdx]->getInSharesList());
+        for (int i = 0; i < inShares->size(); ++i)
+        {
+            // leave share
+            MegaShare* s = inShares->get(i);
+            unique_ptr<MegaNode> n(megaApi[apiIdx]->getNodeByHandle(s->getNodeHandle()));
+            ASSERT_EQ(API_OK, synchronousRemove(apiIdx, n.get()));
+        }
+    }
+
+    // Three user scenario, with nested shares and new nodes created that need keys to be shared to
+    // the other users. User A creates folder and shares it with user B User A creates folders /
+    // subfolder and shares it with user C When user C adds files to subfolder, does B receive the
+    // keys ?
+
+    unique_ptr<MegaNode> rootnodeA(megaApi[0]->getRootNode());
+    unique_ptr<MegaNode> rootnodeB(megaApi[1]->getRootNode());
+    unique_ptr<MegaNode> rootnodeC(megaApi[2]->getRootNode());
+
+    ASSERT_TRUE(rootnodeA && rootnodeB && rootnodeC);
+
+    auto nh = createFolder(0, "share-folder-A", rootnodeA.get());
+    ASSERT_NE(nh, UNDEF);
+    unique_ptr<MegaNode> shareFolderA(megaApi[0]->getNodeByHandle(nh));
+    ASSERT_TRUE(!!shareFolderA);
+
+    nh = createFolder(0, "sub-folder-A", shareFolderA.get());
+    ASSERT_NE(nh, UNDEF);
+    unique_ptr<MegaNode> subFolderA(megaApi[0]->getNodeByHandle(nh));
+    ASSERT_TRUE(!!subFolderA);
+
+    // Initialize a test scenario: create a new contact to share to and verify credentials
+
+    ASSERT_EQ(API_OK,
+              synchronousInviteContact(0,
+                                       mApi[1].email.c_str(),
+                                       "SdkTestShareKeys contact request A to B",
+                                       MegaContactRequest::INVITE_ACTION_ADD));
+    ASSERT_EQ(API_OK,
+              synchronousInviteContact(0,
+                                       mApi[2].email.c_str(),
+                                       "SdkTestShareKeys contact request A to C",
+                                       MegaContactRequest::INVITE_ACTION_ADD));
+
+    ASSERT_TRUE(WaitFor(
+        [this]()
+        {
+            return unique_ptr<MegaContactRequestList>(megaApi[1]->getIncomingContactRequests())
+                           ->size() == 1 &&
+                   unique_ptr<MegaContactRequestList>(megaApi[2]->getIncomingContactRequests())
+                           ->size() == 1;
+        },
+        60000));
+    ASSERT_NO_FATAL_FAILURE(getContactRequest(1, false));
+    ASSERT_NO_FATAL_FAILURE(getContactRequest(2, false));
+
+    ASSERT_EQ(API_OK,
+              synchronousReplyContactRequest(1,
+                                             mApi[1].cr.get(),
+                                             MegaContactRequest::REPLY_ACTION_ACCEPT));
+    ASSERT_EQ(API_OK,
+              synchronousReplyContactRequest(2,
+                                             mApi[2].cr.get(),
+                                             MegaContactRequest::REPLY_ACTION_ACCEPT));
+
+    WaitMillisec(3000);
+
+    if (gManualVerification)
+    {
+        if (!areCredentialsVerified(0, mApi[1].email))
+        {
+            ASSERT_NO_FATAL_FAILURE(SdkTest::verifyCredentials(0, mApi[1].email));
+        }
+        if (!areCredentialsVerified(0, mApi[2].email))
+        {
+            ASSERT_NO_FATAL_FAILURE(SdkTest::verifyCredentials(0, mApi[2].email));
+        }
+        if (!areCredentialsVerified(1, mApi[0].email))
+        {
+            ASSERT_NO_FATAL_FAILURE(SdkTest::verifyCredentials(1, mApi[0].email));
+        }
+        if (!areCredentialsVerified(2, mApi[0].email))
+        {
+            ASSERT_NO_FATAL_FAILURE(SdkTest::verifyCredentials(2, mApi[0].email));
+        }
+    }
+
+    ASSERT_EQ(unsigned(unique_ptr<MegaShareList>(megaApi[1]->getInSharesList())->size()), 0u);
+    ASSERT_EQ(unsigned(unique_ptr<MegaShareList>(megaApi[2]->getInSharesList())->size()), 0u);
+
+    ASSERT_NO_FATAL_FAILURE(
+        shareFolder(shareFolderA.get(), mApi[1].email.c_str(), MegaShare::ACCESS_READ));
+    ASSERT_TRUE(WaitFor(
+        [this]()
+        {
+            return unique_ptr<MegaShareList>(megaApi[1]->getInSharesList())->size() == 1;
+        },
+        60000));
+
+    ASSERT_NO_FATAL_FAILURE(
+        shareFolder(subFolderA.get(), mApi[2].email.c_str(), MegaShare::ACCESS_FULL));
+    ASSERT_TRUE(WaitFor(
+        [this]()
+        {
+            return unique_ptr<MegaShareList>(megaApi[2]->getInSharesList())->size() == 1;
+        },
+        60000));
+
+    ASSERT_EQ(unsigned(unique_ptr<MegaShareList>(megaApi[1]->getInSharesList())->size()), 1u);
+    ASSERT_EQ(unsigned(unique_ptr<MegaShareList>(megaApi[2]->getInSharesList())->size()), 1u);
+
+    // Wait for the inshare nodes to be decrypted
+    ASSERT_TRUE(WaitFor(
+        [this, &shareFolderA]()
+        {
+            return unique_ptr<MegaNode>(megaApi[1]->getNodeByHandle(shareFolderA->getHandle()))
+                ->isNodeKeyDecrypted();
+        },
+        60 * 1000));
+    ASSERT_TRUE(WaitFor(
+        [this, &subFolderA]()
+        {
+            return unique_ptr<MegaNode>(megaApi[2]->getNodeByHandle(subFolderA->getHandle()))
+                ->isNodeKeyDecrypted();
+        },
+        60 * 1000));
+
+    unique_ptr<MegaUser> c1(megaApi[1]->getContact(mApi[0].email.c_str()));
+    unique_ptr<MegaUser> c2(megaApi[2]->getContact(mApi[0].email.c_str()));
+    unique_ptr<MegaNodeList> nl1(megaApi[1]->getInShares(c1.get()));
+    unique_ptr<MegaNodeList> nl2(megaApi[2]->getInShares(c2.get()));
+
+    ASSERT_EQ(1, nl1->size());
+    ASSERT_EQ(1, nl2->size());
+
+    MegaNode* receivedShareNodeC = nl2->get(0);
+
+    ASSERT_NE(createFolder(2, "folderByC1", receivedShareNodeC), UNDEF);
+    ASSERT_NE(createFolder(2, "folderByC2", receivedShareNodeC), UNDEF);
+
+    // Wait for the inshare nodes to be available and decrypted in A
+    ASSERT_TRUE(WaitFor(
+        [this, &subFolderA]()
+        {
+            unique_ptr<MegaNodeList> aView(megaApi[0]->getChildren(subFolderA.get()));
+            return aView->size() == 2 && aView->get(0)->isNodeKeyDecrypted() &&
+                   aView->get(1)->isNodeKeyDecrypted();
+        },
+        60000));
+
+    // can A see the added folders by C?
+    unique_ptr<MegaNodeList> aView(megaApi[0]->getChildren(subFolderA.get()));
+    ASSERT_EQ(2, aView->size());
+    ASSERT_STREQ(aView->get(0)->getName(), "folderByC1");
+    ASSERT_STREQ(aView->get(1)->getName(), "folderByC2");
+
+    // Wait for the inshare nodes to be available and decrypted in B
+    unique_ptr<MegaNode> subFodlerAinB(megaApi[1]->getNodeByHandle(subFolderA->getHandle()));
+    ASSERT_TRUE(subFodlerAinB);
+    ASSERT_TRUE(WaitFor(
+        [this, &subFodlerAinB]()
+        {
+            unique_ptr<MegaNodeList> aView(megaApi[1]->getChildren(subFodlerAinB.get()));
+            return aView->size() == 2 && aView->get(0)->isNodeKeyDecrypted() &&
+                   aView->get(1)->isNodeKeyDecrypted();
+        },
+        60000));
+
+    // Can B see the added folders by C?
+    unique_ptr<MegaNodeList> bView2(megaApi[1]->getChildren(subFodlerAinB.get()));
+    ASSERT_EQ(2, bView2->size());
+    ASSERT_STREQ(bView2->get(0)->getName(), "folderByC1");
+    ASSERT_STREQ(bView2->get(1)->getName(), "folderByC2");
 }
