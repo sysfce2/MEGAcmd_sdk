@@ -167,60 +167,6 @@ public:
     virtual bool searchNodes(const NodeSearchFilter& filter, int order, std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes, CancelToken cancelFlag, const NodeSearchPage& page) = 0;
 
     /**
-     * @brief Search nodes using cursor-based (keyset) pagination.
-     *
-     * Results do not skip items when nodes are deleted between pages, unlike the offset-based
-     * searchNodes(). The cursor is derived from the last returned node and encodes all fields
-     * needed to resume deterministically for the given sort order.
-     *
-     * @param filter      Filter criteria.
-     * @param order       Sort order – ORDER_DEFAULT_ASC/DESC, ORDER_SIZE_ASC/DESC,
-     *                    ORDER_MODIFICATION_ASC/DESC, ORDER_LABEL_ASC/DESC,
-     *                    ORDER_FAV_ASC/DESC.
-     * @param nodes       Output vector.
-     * @param cancelFlag  Cancellation token.
-     * @param maxElements Page size (0 = no limit).
-     * @param cursor      Cursor from previous page, or std::nullopt for first page.
-     * @return true on success, false on DB error.
-     */
-    virtual bool searchNodesByPage(const NodeSearchFilter& filter,
-                                   int order,
-                                   std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes,
-                                   CancelToken cancelFlag,
-                                   size_t maxElements,
-                                   const std::optional<NodeSearchCursorOffset>& cursor) = 0;
-
-    /**
-     * @brief Snapshot-based paged search.
-     *
-     * On the first call (or when the query parameters change), fetches all
-     * matching nodes from SQLite and caches them in a single in-memory snapshot.
-     * Subsequent calls that supply the returned @p cacheKey bypass SQLite
-     * entirely and serve the requested page directly from the snapshot.
-     * Only one snapshot is kept at a time; it is replaced whenever the key
-     * does not match.
-     *
-     * @param filter     Search criteria.
-     * @param order      Sort order (one of the OrderByClause constants).
-     * @param nodes      Output: nodes for the requested page.
-     * @param cancelFlag Cancellation token (used only during the DB fetch).
-     * @param pageOffset Zero-based index of the first node to return.
-     * @param pageSize   Maximum number of nodes to return (0 = return all).
-     * @param cacheKey   In/out: pass the key returned by the previous call to
-     *                   get a cache hit; pass an empty string to force a fresh
-     *                   fetch. Updated to the current snapshot key on return.
-     * @return true on success, false on DB error.
-     */
-    virtual bool
-        searchNodesByPageWithSnapshot(const NodeSearchFilter& filter,
-                                      int order,
-                                      std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes,
-                                      CancelToken cancelFlag,
-                                      size_t pageOffset,
-                                      size_t pageSize,
-                                      std::string& cacheKey) = 0;
-
-    /**
      * @brief
      * Returns a set of all distinct tags below a set of specified parents.
      *
@@ -280,21 +226,21 @@ public:
     virtual void updateCounterAndFlags(NodeHandle nodeHandle, uint64_t flags, const std::string& nodeCounterBlob) = 0;
 
     /**
-     * @brief List all nodes (or all nodes of a specific type) using cursor-based pagination.
+     * @brief List all nodes (or all nodes of a specific MIME type) using cursor-based pagination.
      *
-     * Unlike searchNodes() / searchNodesByPage() which traverse subtrees via recursive CTEs, this
+     * Unlike searchNodes() which traverses subtrees via recursive CTEs, this
      * method issues a simple flat query against the entire nodes table.  It is intended for mobile
      * use-cases that need stable, skip-free pagination over all nodes sorted by one of the
      * supported criteria.
      *
      * Supported sort orders (same constants as MegaApi::ORDER_*):
-     *   ORDER_DEFAULT_ASC / ORDER_DEFAULT_DESC
-     *   ORDER_SIZE_ASC    / ORDER_SIZE_DESC
+     *   ORDER_DEFAULT_ASC      / ORDER_DEFAULT_DESC
+     *   ORDER_SIZE_ASC         / ORDER_SIZE_DESC
      *   ORDER_MODIFICATION_ASC / ORDER_MODIFICATION_DESC
-     *   ORDER_LABEL_ASC
-     *   ORDER_FAV_ASC
+     *   ORDER_LABEL_ASC        / ORDER_LABEL_DESC
+     *   ORDER_FAV_ASC          / ORDER_FAV_DESC
      *
-     * @param nodeType    Type filter: pass TYPE_UNKNOWN to include all node types.
+     * @param mimeType    MIME type filter (must not be MIME_TYPE_UNKNOWN).
      * @param order       One of the ORDER_* constants listed above.
      * @param nodes       Output vector of (handle, serialised-node) pairs.
      * @param cancelFlag  Cancellation token.
@@ -303,12 +249,12 @@ public:
      *                    for the first page.
      * @return true on success, false on DB error.
      */
-    virtual bool listAllNodesByPage(int order,
+    virtual bool listAllNodesByPage(MimeType_t mimeType,
+                                    int order,
                                     std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes,
                                     CancelToken cancelFlag,
                                     size_t maxElements,
-                                    const std::optional<NodeSearchCursorOffset>& cursor,
-                                    MimeType_t mimeType) = 0;
+                                    const std::optional<NodeSearchCursorOffset>& cursor) = 0;
 
     virtual void createIndexes(bool enableIndexesForSearching,
                                bool enableIndexesForLexicographicalList) = 0;

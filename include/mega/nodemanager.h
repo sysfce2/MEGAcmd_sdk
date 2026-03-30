@@ -278,20 +278,23 @@ struct NodeSearchLexicographicalOffset
 };
 
 /**
- * @brief Cursor position for stable cursor-based pagination in searchNodesByPage().
+ * @brief Cursor position for stable cursor-based pagination in listAllNodesByPage().
  *
- * The caller constructs this from the last MegaNode returned on the previous page.
- * Which optional fields must be populated depends on the sort order passed to the search:
- *   - ORDER_DEFAULT_ASC / ORDER_DEFAULT_DESC : only mLastName, mLastType, mLastHandle needed
+ * Build this from the last Node returned in the previous page.
+ * Which optional fields must be populated depends on the sort order:
+ *   - ORDER_DEFAULT_ASC / ORDER_DEFAULT_DESC : only mLastName, mLastHandle needed
  *   - ORDER_SIZE_ASC    / ORDER_SIZE_DESC    : also mLastSize
  *   - ORDER_MODIFICATION_ASC / _DESC         : also mLastMtime
  *   - ORDER_LABEL_ASC / ORDER_LABEL_DESC     : also mLastLabel
  *   - ORDER_FAV_ASC   / ORDER_FAV_DESC       : also mLastFav
+ *
+ * Note on ORDER_FAV_ASC / ORDER_FAV_DESC:
+ *   ORDER_FAV_ASC  – favourites appear FIRST  (SQL: ORDER BY fav DESC, name ASC)
+ *   ORDER_FAV_DESC – favourites appear LAST   (SQL: ORDER BY fav ASC,  name ASC)
  */
 struct NodeSearchCursorOffset
 {
     std::string mLastName;
-    int mLastType = 0;
     handle mLastHandle = mega::UNDEF;
 
     std::optional<int64_t> mLastSize; ///< sizeVirtual for SIZE sorts
@@ -346,54 +349,6 @@ public:
 
     sharedNode_vector searchNodes(const NodeSearchFilter& filter, int order, CancelToken cancelFlag, const NodeSearchPage& page);
 
-    /**
-     * @brief Search nodes with cursor-based (keyset) pagination.
-     *
-     * Unlike searchNodes() which uses offset/size pagination, this method uses a cursor derived
-     * from the last node of the previous page, so pages remain stable even when nodes are deleted
-     * between calls.
-     *
-     * @param filter      Filter criteria (same as searchNodes).
-     * @param order       Sort order – must be one of ORDER_DEFAULT_ASC/DESC, ORDER_SIZE_ASC/DESC,
-     *                    ORDER_MODIFICATION_ASC/DESC, ORDER_LABEL_ASC/DESC,
-     *                    or ORDER_FAV_ASC/DESC.
-     * @param cancelFlag  Optional cancellation token.
-     * @param maxElements Maximum number of results to return (0 = no limit).
-     * @param cursor      Cursor from the last node of the previous page, or std::nullopt for the
-     *                    first page.
-     * @return            Vector of matching nodes.
-     */
-    sharedNode_vector searchNodesByPage(const NodeSearchFilter& filter,
-                                        int order,
-                                        CancelToken cancelFlag,
-                                        size_t maxElements,
-                                        const std::optional<NodeSearchCursorOffset>& cursor);
-
-    /**
-     * @brief Snapshot-based paged search.
-     *
-     * On the first call (or when filter/order differs from the cached snapshot),
-     * all matching nodes are fetched from SQLite and cached in memory.
-     * Subsequent calls that supply the returned @p cacheKey are served entirely
-     * from the in-memory snapshot.  Only one snapshot is kept at a time.
-     *
-     * @param filter     Search criteria.
-     * @param order      Sort order constant.
-     * @param cancelFlag Cancellation token (used only during the DB fetch).
-     * @param pageOffset Zero-based index of the first result to return.
-     * @param pageSize   Maximum number of results (0 = return all).
-     * @param cacheKey   In/out: pass the key from the previous call for a cache
-     *                   hit; pass an empty string to force a fresh fetch.
-     *                   Updated to the current snapshot key on return.
-     * @return           Vector of matching nodes for the requested page.
-     */
-    sharedNode_vector searchNodesByPageWithSnapshot(const NodeSearchFilter& filter,
-                                                    int order,
-                                                    CancelToken cancelFlag,
-                                                    size_t pageOffset,
-                                                    size_t pageSize,
-                                                    std::string& cacheKey);
-
     sharedNode_vector listChildNodesLexicographically(
         const handle parenthandle,
         CancelToken cancelFlag,
@@ -413,9 +368,8 @@ public:
      * restriction.  It is intended for mobile pagination scenarios where offset-based paging
      * would silently skip items when nodes are deleted between pages.
      *
-     * @param nodeType    Pass TYPE_UNKNOWN to include every node type.
      * @param order       One of ORDER_DEFAULT_ASC/DESC, ORDER_SIZE_ASC/DESC,
-     *                    ORDER_MODIFICATION_ASC/DESC, ORDER_LABEL_ASC, ORDER_FAV_ASC.
+     *                    ORDER_MODIFICATION_ASC/DESC, ORDER_LABEL_ASC/DESC, ORDER_FAV_ASC/DESC.
      * @param cancelFlag  Optional cancellation token.
      * @param maxElements Page size (0 = no limit).
      * @param cursor      Cursor built from the last node of the previous page, or std::nullopt
@@ -423,18 +377,18 @@ public:
      *                    sort order – see NodeSearchCursorOffset.
      * @return            Vector of matching nodes.
      */
-    sharedNode_vector listAllNodesByPage(int order,
+    sharedNode_vector listAllNodesByPage(MimeType_t mimeType,
+                                         int order,
                                          CancelToken cancelFlag,
                                          size_t maxElements,
-                                         const std::optional<NodeSearchCursorOffset>& cursor,
-                                         MimeType_t mimeType);
+                                         const std::optional<NodeSearchCursorOffset>& cursor);
 
     sharedNode_vector
-        listAllNodesByPage_internal(int order,
+        listAllNodesByPage_internal(MimeType_t mimeType,
+                                    int order,
                                     CancelToken cancelFlag,
                                     size_t maxElements,
-                                    const std::optional<NodeSearchCursorOffset>& cursor,
-                                    MimeType_t mimeType);
+                                    const std::optional<NodeSearchCursorOffset>& cursor);
 
     /*
      * @brief
@@ -727,19 +681,10 @@ private:
     // If a valid object is passed, it must be kept alive until this method returns.
     sharedNode_vector processUnserializedNodes(const std::vector<std::pair<NodeHandle, NodeSerialized>>& nodesFromTable, NodeHandle ancestorHandle = NodeHandle(), CancelToken cancelFlag = CancelToken());
 
-    sharedNode_vector searchNodes_internal(const NodeSearchFilter& filter, int order, CancelToken cancelFlag, const NodeSearchPage& page);
-    sharedNode_vector
-        searchNodesByPage_internal(const NodeSearchFilter& filter,
-                                   int order,
-                                   CancelToken cancelFlag,
-                                   size_t maxElements,
-                                   const std::optional<NodeSearchCursorOffset>& cursor);
-    sharedNode_vector searchNodesByPageWithSnapshot_internal(const NodeSearchFilter& filter,
-                                                             int order,
-                                                             CancelToken cancelFlag,
-                                                             size_t pageOffset,
-                                                             size_t pageSize,
-                                                             std::string& cacheKey);
+    sharedNode_vector searchNodes_internal(const NodeSearchFilter& filter,
+                                           int order,
+                                           CancelToken cancelFlag,
+                                           const NodeSearchPage& page);
     sharedNode_vector processUnserializedNodes(const std::vector<std::pair<NodeHandle, NodeSerialized>>& nodesFromTable, CancelToken cancelFlag);
     sharedNode_vector getChildren_internal(const NodeSearchFilter& filter, int order, CancelToken cancelFlag, const NodeSearchPage& page);
     sharedNode_vector getRecentNodes_internal(const NodeSearchPage& page, m_time_t since);

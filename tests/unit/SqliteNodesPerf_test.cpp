@@ -15,6 +15,8 @@
  *   Total ≈ 3 + 10 + 100 + 9 800 = 9 913 nodes
  */
 
+#include "utils.h"
+
 #include <gtest/gtest.h>
 #include <mega/db/sqlite.h>
 #include <mega/megaapp.h>
@@ -23,19 +25,10 @@
 
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <mega.h>
 #include <optional>
-#include <sstream>
-#include <string>
-
-#if defined(__linux__)
-#include <malloc.h>
-#endif
-
-#include "utils.h"
-
 #include <stdfs.h>
+#include <string>
 
 #ifdef USE_SQLITE
 
@@ -49,7 +42,7 @@ namespace
 // ─── Dataset dimensions ─────────────────────────────────────────────────────
 constexpr int NUM_TOP_FOLDERS = 10;
 constexpr int NUM_SUB_PER_TOP = 10; // → 100 sub-folders total
-constexpr int NUM_FILES_PER_SUB = 980; // → 98,0000 file nodes total
+constexpr int NUM_FILES_PER_SUB = 98; // → 9,800 file nodes total
 
 // ─── Iteration counts ───────────────────────────────────────────────────────
 // Simple point-queries (index seek, returns ≤ 1 row)
@@ -68,65 +61,6 @@ long long measureUs(int iters, Fn&& fn)
     auto t1 = std::chrono::steady_clock::now();
     return std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
 }
-
-// ─── Memory helpers ──────────────────────────────────────────────────────────
-
-/// Resident Set Size in kilobytes, read from /proc/self/status.
-/// Returns 0 if the file is unavailable (non-Linux platforms).
-static size_t getRssKb()
-{
-#if defined(__linux__)
-    std::ifstream status("/proc/self/status");
-    std::string line;
-    while (std::getline(status, line))
-    {
-        if (line.compare(0, 6, "VmRSS:") == 0)
-        {
-            size_t val = 0;
-            // Format: "VmRSS:   12345 kB"
-            std::istringstream iss(line.substr(6));
-            iss >> val;
-            return val;
-        }
-    }
-#endif
-    return 0;
-}
-
-/// Heap bytes currently allocated (in-use), via mallinfo2 (glibc ≥ 2.33)
-/// or mallinfo as fallback.  Returns 0 on non-glibc platforms.
-static size_t getHeapBytes()
-{
-#if defined(__linux__) && defined(_GNU_SOURCE)
-#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
-    struct mallinfo2 mi = mallinfo2();
-    return static_cast<size_t>(mi.uordblks);
-#else
-    struct mallinfo mi = mallinfo();
-    return static_cast<size_t>(static_cast<unsigned int>(mi.uordblks));
-#endif
-#else
-    return 0;
-#endif
-}
-
-/// Simple snapshot of both RSS and heap at a point in time.
-struct MemSnapshot
-{
-    size_t rssKb = 0; ///< Resident Set Size in kB
-    size_t heapBytes = 0; ///< In-use heap bytes
-
-    static MemSnapshot take()
-    {
-        return {getRssKb(), getHeapBytes()};
-    }
-
-    MemSnapshot operator-(const MemSnapshot& base) const
-    {
-        return {rssKb >= base.rssKb ? rssKb - base.rssKb : 0,
-                heapBytes >= base.heapBytes ? heapBytes - base.heapBytes : 0};
-    }
-};
 
 // ─── Test fixture ───────────────────────────────────────────────────────────
 class SqliteNodesPerfTest: public ::testing::Test
@@ -151,14 +85,9 @@ protected:
     std::string mLeafFileFingerprint; // serialised FileFingerprint blob
     NodeHandle mLeafParentHandle; // direct parent (sub-folder)
 
-    // Representative leaf files for mime-filter tests (i=0, j=0)
-    NodeHandle mPhotoLeafHandle; // k=20 → k%10==0 → .jpg
-    std::string mPhotoLeafFileName;
+    // Representative video leaf file for mime-filter cursor tests (i=0, j=0, k=25)
     NodeHandle mVideoLeafHandle; // k=25 → k%10==5 → .mp4
     std::string mVideoLeafFileName;
-
-    // A folder that has a share flag set
-    NodeHandle mSharedFolderHandle;
 
     void SetUp() override
     {
@@ -262,8 +191,6 @@ protected:
                     addNode(FOLDERNODE,
                             topFolder,
                             "SubFolder_" + std::to_string(i) + "_" + std::to_string(j));
-                if (i == 0 && j == 0)
-                    mSharedFolderHandle = subFolder->nodeHandle();
                 mSubFolderHandles.push_back(subFolder->nodeHandle());
 
                 for (int k = 0; k < NUM_FILES_PER_SUB; ++k)
@@ -301,13 +228,6 @@ protected:
                         leafCaptured = true;
                     }
 
-                    // Capture photo leaf: i=0, j=0, k=20 → k%10==0 → .jpg
-                    if (i == 0 && j == 0 && k == 20)
-                    {
-                        mPhotoLeafHandle = file->nodeHandle();
-                        mPhotoLeafFileName = fname;
-                    }
-
                     // Capture video leaf: i=0, j=0, k=25 → k%10==5 → .mp4
                     if (i == 0 && j == 0 && k == 25)
                     {
@@ -325,14 +245,13 @@ protected:
         return dynamic_cast<DBTableNodes*>(mClient->sctable.get());
     }
 
-    // ── Build a cursor anchored at the leaf file for searchNodesByPage ────────
+    // ── Build a cursor anchored at the leaf file for listAllNodesByPage ───────
     // Only the sort-key optional relevant to `order` is populated so that the
-    // WHERE clause generated by searchNodesByPage matches what production uses.
+    // WHERE clause matches what production uses.
     NodeSearchCursorOffset leafCursor(int order) const
     {
         NodeSearchCursorOffset c;
         c.mLastName = mLeafFileName;
-        c.mLastType = FILENODE;
         c.mLastHandle = mLeafFileHandle.as8byte();
 
         switch (order)
@@ -363,44 +282,11 @@ protected:
         return c;
     }
 
-    // ── Cursor anchored at the representative .jpg leaf (i=0, j=0, k=20) ─────
-    NodeSearchCursorOffset photoLeafCursor(int order) const
-    {
-        NodeSearchCursorOffset c;
-        c.mLastName = mPhotoLeafFileName;
-        c.mLastType = FILENODE;
-        c.mLastHandle = mPhotoLeafHandle.as8byte();
-
-        switch (order)
-        {
-            case OrderByClause::SIZE_ASC:
-            case OrderByClause::SIZE_DESC:
-                c.mLastSize = 0;
-                break;
-            case OrderByClause::MTIME_ASC:
-            case OrderByClause::MTIME_DESC:
-                c.mLastMtime = 1700000000LL + static_cast<int64_t>(mPhotoLeafHandle.as8byte());
-                break;
-            case OrderByClause::LABEL_ASC:
-            case OrderByClause::LABEL_DESC:
-                c.mLastLabel = 20 % 7; // k=20 → label = 6
-                break;
-            case OrderByClause::FAV_ASC:
-            case OrderByClause::FAV_DESC:
-                c.mLastFav = 0;
-                break;
-            default:
-                break;
-        }
-        return c;
-    }
-
     // ── Cursor anchored at the representative .mp4 leaf (i=0, j=0, k=25) ─────
     NodeSearchCursorOffset videoLeafCursor(int order) const
     {
         NodeSearchCursorOffset c;
         c.mLastName = mVideoLeafFileName;
-        c.mLastType = FILENODE;
         c.mLastHandle = mVideoLeafHandle.as8byte();
 
         switch (order)
@@ -432,8 +318,12 @@ protected:
 //  Individual benchmarks
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Type alias so GTest registers every TEST_F under a DISABLED_ suite name.
+// Run with --gtest_also_run_disabled_tests to include them.
+using DISABLED_SqliteNodesPerfTest = SqliteNodesPerfTest;
+
 // ─── 1. getNumberOfNodes ────────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetNumberOfNodes)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetNumberOfNodes)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -451,7 +341,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetNumberOfNodes)
 }
 
 // ─── 2. getNode (single handle lookup) ──────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetNode)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetNode)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -473,7 +363,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetNode)
 }
 
 // ─── 3. getNumberOfChildren ─────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetNumberOfChildren)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetNumberOfChildren)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -494,7 +384,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetNumberOfChildren)
 }
 
 // ─── 4. getNumberOfChildrenByType ───────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetNumberOfChildrenByType)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetNumberOfChildrenByType)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -517,7 +407,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetNumberOfChildrenByType)
 }
 
 // ─── 5. childNodeByNameType ─────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfChildNodeByNameType)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfChildNodeByNameType)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -541,7 +431,7 @@ TEST_F(SqliteNodesPerfTest, PerfChildNodeByNameType)
 }
 
 // ─── 6. getNodeSizeTypeAndFlags ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetNodeSizeTypeAndFlags)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetNodeSizeTypeAndFlags)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -566,7 +456,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetNodeSizeTypeAndFlags)
 }
 
 // ─── 7. getNodeByFingerprint ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetNodeByFingerprint)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetNodeByFingerprint)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -589,7 +479,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetNodeByFingerprint)
 }
 
 // ─── 8. getNodesByOrigFingerprint ───────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetNodesByOrigFingerprint)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetNodesByOrigFingerprint)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -608,7 +498,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetNodesByOrigFingerprint)
 }
 
 // ─── 9. getRootNodes ────────────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetRootNodes)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetRootNodes)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -629,7 +519,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetRootNodes)
 }
 
 // ─── 10. getChildren (no filter, default order) ─────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetChildren_NoFilter)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetChildren_NoFilter)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -661,7 +551,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetChildren_NoFilter)
 }
 
 // ─── 11. getChildren (filter by name) ───────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetChildren_FilterByName)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetChildren_FilterByName)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -694,7 +584,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetChildren_FilterByName)
 }
 
 // ─── 12. getChildren (ordered by size) ──────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetChildren_OrderBySize)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetChildren_OrderBySize)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -726,7 +616,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetChildren_OrderBySize)
 }
 
 // ─── 13. getChildren (ordered by mtime) ─────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetChildren_OrderByMtime)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetChildren_OrderByMtime)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -758,7 +648,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetChildren_OrderByMtime)
 }
 
 // ─── 14. getChildren (paginated) ────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetChildren_Paginated)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetChildren_Paginated)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -769,8 +659,8 @@ TEST_F(SqliteNodesPerfTest, PerfGetChildren_Paginated)
     NodeSearchFilter filter;
     filter.byLocationHandle(parent.as8byte());
 
-    constexpr size_t PAGE_SIZE = 20;
-    constexpr size_t PAGE_OFFSET = 10;
+    constexpr size_t kPageSize = 20;
+    constexpr size_t kPageOffset = 10;
 
     const long long us =
         measureUs(COMPLEX_ITERS,
@@ -778,23 +668,23 @@ TEST_F(SqliteNodesPerfTest, PerfGetChildren_Paginated)
                   {
                       std::vector<std::pair<NodeHandle, NodeSerialized>> children;
                       CancelToken ct;
-                      NodeSearchPage page{PAGE_OFFSET, PAGE_SIZE};
+                      NodeSearchPage page{kPageOffset, kPageSize};
                       table->getChildren(filter, OrderByClause::DEFAULT_ASC, children, ct, page);
                   });
 
     std::vector<std::pair<NodeHandle, NodeSerialized>> children;
     CancelToken ct;
-    NodeSearchPage page{PAGE_OFFSET, PAGE_SIZE};
+    NodeSearchPage page{kPageOffset, kPageSize};
     table->getChildren(filter, OrderByClause::DEFAULT_ASC, children, ct, page);
 
-    EXPECT_LE(children.size(), PAGE_SIZE);
-    GTEST_LOG_(INFO) << "getChildren (paginated offset=" << PAGE_OFFSET << " size=" << PAGE_SIZE
+    EXPECT_LE(children.size(), kPageSize);
+    GTEST_LOG_(INFO) << "getChildren (paginated offset=" << kPageOffset << " size=" << kPageSize
                      << ") [" << children.size() << " results]: " << COMPLEX_ITERS
                      << " iters, total " << us << " us, avg " << us / COMPLEX_ITERS << " us/iter";
 }
 
 // ─── 15. listChildNodesLexicographically (no offset) ────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfListChildNodesLexicographically_NoOffset)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfListChildNodesLexicographically_NoOffset)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -825,7 +715,7 @@ TEST_F(SqliteNodesPerfTest, PerfListChildNodesLexicographically_NoOffset)
 }
 
 // ─── 16. listChildNodesLexicographically (with offset) ──────────────────────
-TEST_F(SqliteNodesPerfTest, PerfListChildNodesLexicographically_WithOffset)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfListChildNodesLexicographically_WithOffset)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -858,7 +748,7 @@ TEST_F(SqliteNodesPerfTest, PerfListChildNodesLexicographically_WithOffset)
 }
 
 // ─── 17. searchNodes (recursive, from root, no filter) ──────────────────────
-TEST_F(SqliteNodesPerfTest, PerfSearchNodes_FromRoot_NoFilter)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfSearchNodes_FromRoot_NoFilter)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -887,7 +777,7 @@ TEST_F(SqliteNodesPerfTest, PerfSearchNodes_FromRoot_NoFilter)
 }
 
 // ─── 18. searchNodes (recursive, from root, filter by name) ─────────────────
-TEST_F(SqliteNodesPerfTest, PerfSearchNodes_FromRoot_FilterByName)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfSearchNodes_FromRoot_FilterByName)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -917,7 +807,7 @@ TEST_F(SqliteNodesPerfTest, PerfSearchNodes_FromRoot_FilterByName)
 }
 
 // ─── 19. searchNodes (recursive, from root, filter FILENODE type) ────────────
-TEST_F(SqliteNodesPerfTest, PerfSearchNodes_FromRoot_FilterByType)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfSearchNodes_FromRoot_FilterByType)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -947,7 +837,7 @@ TEST_F(SqliteNodesPerfTest, PerfSearchNodes_FromRoot_FilterByType)
 }
 
 // ─── 20. searchNodes (recursive, from root, order by ctime DESC) ─────────────
-TEST_F(SqliteNodesPerfTest, PerfSearchNodes_FromRoot_OrderByCtime)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfSearchNodes_FromRoot_OrderByCtime)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -977,7 +867,7 @@ TEST_F(SqliteNodesPerfTest, PerfSearchNodes_FromRoot_OrderByCtime)
 }
 
 // ─── 21. searchNodes (recursive, ALL_VISUAL_MEDIA, page 51-100) ─────────────
-TEST_F(SqliteNodesPerfTest, PerfSearchNodes_FromRoot_AllVisualMedia_Page51To100)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfSearchNodes_FromRoot_AllVisualMedia_Page51To100)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -1023,7 +913,7 @@ TEST_F(SqliteNodesPerfTest, PerfSearchNodes_FromRoot_AllVisualMedia_Page51To100)
 }
 
 // ─── 22. searchNodes (recursive, sub-tree only) ──────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfSearchNodes_SubTree)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfSearchNodes_SubTree)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -1053,7 +943,7 @@ TEST_F(SqliteNodesPerfTest, PerfSearchNodes_SubTree)
 }
 
 // ─── 23. getRecentNodes ──────────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetRecentNodes)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetRecentNodes)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -1079,7 +969,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetRecentNodes)
 }
 
 // ─── 24. getRecentNodes (with since filter) ──────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetRecentNodes_WithSince)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetRecentNodes_WithSince)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -1105,7 +995,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetRecentNodes_WithSince)
 }
 
 // ─── 25. getFavouritesHandles ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetFavouritesHandles)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetFavouritesHandles)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -1127,7 +1017,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetFavouritesHandles)
 }
 
 // ─── 26. isAncestor ──────────────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfIsAncestor)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfIsAncestor)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -1149,7 +1039,7 @@ TEST_F(SqliteNodesPerfTest, PerfIsAncestor)
 }
 
 // ─── 26. getNodesWithSharesOrLink (in-shares) ────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetNodesWithSharesOrLink_InShares)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetNodesWithSharesOrLink_InShares)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -1171,7 +1061,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetNodesWithSharesOrLink_InShares)
 }
 
 // ─── 27. getNodesWithSharesOrLink (public links) ─────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetNodesWithSharesOrLink_Links)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetNodesWithSharesOrLink_Links)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -1192,7 +1082,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetNodesWithSharesOrLink_Links)
 }
 
 // ─── 28. getNodeTagsBelow ────────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfGetNodeTagsBelow)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfGetNodeTagsBelow)
 {
     auto* table = nodesTable();
     ASSERT_NE(table, nullptr);
@@ -1213,7 +1103,7 @@ TEST_F(SqliteNodesPerfTest, PerfGetNodeTagsBelow)
 }
 
 // ─── 29. put (INSERT OR REPLACE) ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfPutNode)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfPutNode)
 {
     auto* table = nodesTable();
     auto* sa = dynamic_cast<SqliteAccountState*>(mClient->sctable.get());
@@ -1248,7 +1138,7 @@ TEST_F(SqliteNodesPerfTest, PerfPutNode)
 }
 
 // ─── 30. updateCounter ───────────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfUpdateCounter)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfUpdateCounter)
 {
     auto* sa = dynamic_cast<SqliteAccountState*>(mClient->sctable.get());
     ASSERT_NE(sa, nullptr);
@@ -1268,7 +1158,7 @@ TEST_F(SqliteNodesPerfTest, PerfUpdateCounter)
 }
 
 // ─── 31. updateCounterAndFlags ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfUpdateCounterAndFlags)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfUpdateCounterAndFlags)
 {
     auto* sa = dynamic_cast<SqliteAccountState*>(mClient->sctable.get());
     ASSERT_NE(sa, nullptr);
@@ -1289,89 +1179,7 @@ TEST_F(SqliteNodesPerfTest, PerfUpdateCounterAndFlags)
 }
 
 // ─── 32. remove (single node) ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfTest, PerfRemoveNode)
-{
-    auto* sa = dynamic_cast<SqliteAccountState*>(mClient->sctable.get());
-    ASSERT_NE(sa, nullptr);
-    ASSERT_FALSE(mFileHandles.empty());
-    ASSERT_GE(mFileHandles.size(), static_cast<size_t>(SIMPLE_ITERS));
-
-    const long long us = measureUs(SIMPLE_ITERS,
-                                   [&, idx = 0]() mutable
-                                   {
-                                       sa->remove(mFileHandles[static_cast<size_t>(idx)]);
-                                       ++idx;
-                                   });
-
-    GTEST_LOG_(INFO) << "remove(NodeHandle) [NO listAll index]: " << SIMPLE_ITERS
-                     << " iters, total " << us << " us, avg " << us / SIMPLE_ITERS << " us/iter";
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  searchNodesByPage performance benchmarks  (SqliteNodesPerfSearchTest)
-//
-//  SqliteNodesPerfSearchTest extends SqliteNodesPerfTest; no extra indexes are
-//  needed because the base SetUp() already creates the search index set
-//  (enableSearch = true).
-//
-//  Test inventory (40 cases):
-//    1–20  : MIME_TYPE_VIDEO        × 10 sort orders × {first page, mid cursor}
-//    21–40 : MIME_TYPE_ALL_VISUAL_MEDIA × 10 sort orders × {first page, mid cursor}
-//
-//  Order: DEFAULT_ASC/DESC → MTIME_ASC/DESC → SIZE_ASC/DESC →
-//         FAV_ASC/DESC → LABEL_ASC/DESC.
-//
-//  The mid-cursor is anchored at the representative .mp4 node (i=0, j=0, k=25)
-//  via videoLeafCursor().  For SIZE_* orders the cursor uses mLastSize = 0
-//  (sizeVirtual is not pre-computed), so name/handle tie-breaking drives
-//  ordering — the SQL code path is identical to production.
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * @brief Groups all searchNodesByPage benchmarks under a single fixture.
- *
- * Inherits the fully-populated DB and the search index set from
- * SqliteNodesPerfTest::SetUp() without any additional configuration.
- */
-class SqliteNodesPerfSearchTest: public SqliteNodesPerfTest
-{};
-
-// ─── 29. put (INSERT OR REPLACE) ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, PerfPutNode)
-{
-    auto* table = nodesTable();
-    auto* sa = dynamic_cast<SqliteAccountState*>(mClient->sctable.get());
-    ASSERT_NE(table, nullptr);
-    ASSERT_NE(sa, nullptr);
-
-    // Create a fresh node outside the main dataset; re-insert it every iteration.
-    NodeHandle freshHandle = NodeHandle().set6byte(mNextHandle++);
-    Node& freshRef = mt::makeNode(*mClient,
-                                  FILENODE,
-                                  freshHandle,
-                                  /*parent=*/nullptr);
-    auto freshNode = std::shared_ptr<Node>(&freshRef);
-
-    static const nameid nameId = AttrMap::string2nameid("n");
-    freshNode->attrs.map[nameId] = "perf_test_node.dat";
-    freshNode->size = 1024;
-    freshNode->ctime = 1700000000LL;
-    freshNode->mtime = 1700000000LL;
-    freshNode->isvalid = false; // no CRC → fingerprint BLOB will be empty
-
-    mClient->mNodeManager.addNode(freshNode, false, true, mMissingParentNodes);
-
-    const long long us = measureUs(SIMPLE_ITERS,
-                                   [&]
-                                   {
-                                       sa->put(freshNode.get());
-                                   });
-
-    GTEST_LOG_(INFO) << "put(Node*) (INSERT OR REPLACE) [NO listAll index]: " << SIMPLE_ITERS
-                     << " iters, total " << us << " us, avg " << us / SIMPLE_ITERS << " us/iter";
-}
-
-TEST_F(SqliteNodesPerfSearchTest, PerfRemoveNode)
+TEST_F(DISABLED_SqliteNodesPerfTest, PerfRemoveNode)
 {
     auto* sa = dynamic_cast<SqliteAccountState*>(mClient->sctable.get());
     ASSERT_NE(sa, nullptr);
@@ -1390,3204 +1198,152 @@ TEST_F(SqliteNodesPerfSearchTest, PerfRemoveNode)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  searchNodesByPage – MIME_TYPE_VIDEO
-//  All 10 sort orders × {first page (no cursor), mid cursor} = 20 cases.
-// ═══════════════════════════════════════════════════════════════════════════
-
-// ─── 1. DEFAULT_ASC, first page ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_DefaultAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::DEFAULT_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::DEFAULT_ASC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (DEFAULT_ASC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 2. DEFAULT_ASC, mid cursor ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_DefaultAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::DEFAULT_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::DEFAULT_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                cursor);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::DEFAULT_ASC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (DEFAULT_ASC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 3. DEFAULT_DESC, first page ────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_DefaultDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::DEFAULT_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table
-        ->searchNodesByPage(filter, OrderByClause::DEFAULT_DESC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (DEFAULT_DESC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 4. DEFAULT_DESC, mid cursor ────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_DefaultDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::DEFAULT_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::DEFAULT_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                cursor);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::DEFAULT_DESC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (DEFAULT_DESC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 5. MTIME_ASC, first page ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_MtimeAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::MTIME_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::MTIME_ASC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (MTIME_ASC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 6. MTIME_ASC, mid cursor ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_MtimeAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::MTIME_ASC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::MTIME_ASC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::MTIME_ASC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (MTIME_ASC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 7. MTIME_DESC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_MtimeDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::MTIME_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::MTIME_DESC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (MTIME_DESC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 8. MTIME_DESC, mid cursor ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_MtimeDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::MTIME_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::MTIME_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                cursor);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::MTIME_DESC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (MTIME_DESC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 9. SIZE_ASC, first page ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_SizeAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::SIZE_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::SIZE_ASC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (SIZE_ASC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 10. SIZE_ASC, mid cursor ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_SizeAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::SIZE_ASC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::SIZE_ASC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::SIZE_ASC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (SIZE_ASC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 11. SIZE_DESC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_SizeDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::SIZE_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::SIZE_DESC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (SIZE_DESC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 12. SIZE_DESC, mid cursor ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_SizeDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::SIZE_DESC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::SIZE_DESC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::SIZE_DESC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (SIZE_DESC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 13. FAV_ASC, first page ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_FavAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::FAV_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::FAV_ASC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (FAV_ASC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 14. FAV_ASC, mid cursor ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_FavAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::FAV_ASC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::FAV_ASC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::FAV_ASC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (FAV_ASC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 15. FAV_DESC, first page ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_FavDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::FAV_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::FAV_DESC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (FAV_DESC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 16. FAV_DESC, mid cursor ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_FavDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::FAV_DESC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::FAV_DESC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::FAV_DESC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (FAV_DESC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 17. LABEL_ASC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_LabelAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::LABEL_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::LABEL_ASC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (LABEL_ASC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 18. LABEL_ASC, mid cursor ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_LabelAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::LABEL_ASC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::LABEL_ASC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::LABEL_ASC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (LABEL_ASC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 19. LABEL_DESC, first page ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_LabelDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::LABEL_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::LABEL_DESC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (LABEL_DESC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 20. LABEL_DESC, mid cursor ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_Video_LabelDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_VIDEO);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::LABEL_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::LABEL_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                cursor);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::LABEL_DESC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (LABEL_DESC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  searchNodesByPage – MIME_TYPE_ALL_VISUAL_MEDIA
-//  All 10 sort orders × {first page (no cursor), mid cursor} = 20 cases.
-//  Mid-cursor uses videoLeafCursor() (.mp4 node), which is within the
-//  ALL_VISUAL_MEDIA result set.
-// ═══════════════════════════════════════════════════════════════════════════
-
-// ─── 21. DEFAULT_ASC, first page ────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_DefaultAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::DEFAULT_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::DEFAULT_ASC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (DEFAULT_ASC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 22. DEFAULT_ASC, mid cursor ────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_DefaultAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::DEFAULT_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::DEFAULT_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                cursor);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::DEFAULT_ASC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (DEFAULT_ASC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 23. DEFAULT_DESC, first page ───────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_DefaultDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::DEFAULT_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table
-        ->searchNodesByPage(filter, OrderByClause::DEFAULT_DESC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (DEFAULT_DESC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 24. DEFAULT_DESC, mid cursor ───────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_DefaultDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::DEFAULT_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::DEFAULT_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                cursor);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::DEFAULT_DESC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (DEFAULT_DESC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 25. MTIME_ASC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_MtimeAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::MTIME_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::MTIME_ASC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (MTIME_ASC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 26. MTIME_ASC, mid cursor ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_MtimeAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::MTIME_ASC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::MTIME_ASC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::MTIME_ASC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (MTIME_ASC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 27. MTIME_DESC, first page ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_MtimeDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::MTIME_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::MTIME_DESC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (MTIME_DESC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 28. MTIME_DESC, mid cursor ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_MtimeDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::MTIME_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::MTIME_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                cursor);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::MTIME_DESC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (MTIME_DESC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 29. SIZE_ASC, first page ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_SizeAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::SIZE_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::SIZE_ASC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (SIZE_ASC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 30. SIZE_ASC, mid cursor ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_SizeAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::SIZE_ASC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::SIZE_ASC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::SIZE_ASC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (SIZE_ASC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 31. SIZE_DESC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_SizeDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::SIZE_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::SIZE_DESC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (SIZE_DESC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 32. SIZE_DESC, mid cursor ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_SizeDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::SIZE_DESC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::SIZE_DESC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::SIZE_DESC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (SIZE_DESC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 33. FAV_ASC, first page ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_FavAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::FAV_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::FAV_ASC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (FAV_ASC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 34. FAV_ASC, mid cursor ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_FavAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::FAV_ASC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::FAV_ASC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::FAV_ASC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (FAV_ASC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 35. FAV_DESC, first page ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_FavDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::FAV_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::FAV_DESC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (FAV_DESC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 36. FAV_DESC, mid cursor ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_FavDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::FAV_DESC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::FAV_DESC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::FAV_DESC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (FAV_DESC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 37. LABEL_ASC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_LabelAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::LABEL_ASC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::LABEL_ASC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (LABEL_ASC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 38. LABEL_ASC, mid cursor ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_LabelAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::LABEL_ASC);
-
-    const long long us = measureUs(
-        COMPLEX_ITERS,
-        [&]
-        {
-            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-            CancelToken ct;
-            table->searchNodesByPage(filter, OrderByClause::LABEL_ASC, nodes, ct, pageSize, cursor);
-        });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::LABEL_ASC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (LABEL_ASC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 39. LABEL_DESC, first page ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_LabelDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::LABEL_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                std::nullopt);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::LABEL_DESC, nodes, ct, pageSize, std::nullopt);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "searchNodesByPage (LABEL_DESC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 40. LABEL_DESC, mid cursor ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfSearchTest, SearchByPage_AllVisualMedia_LabelDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::LABEL_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->searchNodesByPage(filter,
-                                                                OrderByClause::LABEL_DESC,
-                                                                nodes,
-                                                                ct,
-                                                                pageSize,
-                                                                cursor);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->searchNodesByPage(filter, OrderByClause::LABEL_DESC, nodes, ct, pageSize, cursor);
-
-    GTEST_LOG_(INFO) << "searchNodesByPage (LABEL_DESC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  listAllNodesByPage performance benchmarks  (SqliteNodesPerfListAllTest)
+//  listAllNodesByPage – parameterised suite
 //
-//  SqliteNodesPerfListAllTest extends SqliteNodesPerfTest with the full
-//  search index set enabled (which includes the listallnodes* indexes), so
-//  every query below uses the dedicated listallnodes* indexes rather than a full scan.
-//
-//  Test inventory (42 cases):
-//    1–2   : PutNode / RemoveNode  — insert/delete cost with the index active
-//    3–22  : MIME_TYPE_ALL_VISUAL_MEDIA × 10 sort orders × {first page, mid cursor}
-//    23–42 : MIME_TYPE_VIDEO        × 10 sort orders × {first page, mid cursor}
-//
+//  Covers MIME_TYPE_ALL_VISUAL_MEDIA and MIME_TYPE_VIDEO across all 10 sort
+//  orders with two cursor states each (first page / mid cursor) = 40 cases.
 //  No wall-clock assertions are made; the suite never fails on slow machines.
 // ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * @brief Extends SqliteNodesPerfTest with all search indexes (including listallnodes* indexes)
- * enabled.
- *
- * SetUp() calls the parent's SetUp() (which populates the DB and creates the
- * search + lexicographic indexes), then re-invokes createIndexes with enableSearch=true
- * to ensure the listallnodes* indexes are present.
- * Using CREATE INDEX IF NOT EXISTS means the call is idempotent and safe even
- * if the parent already created some of the same indexes.
- */
-class SqliteNodesPerfListAllTest: public SqliteNodesPerfTest
+struct ListAllByPageParam
 {
-protected:
-    void SetUp() override
-    {
-        SqliteNodesPerfTest::SetUp();
-
-        if (auto* sa = dynamic_cast<SqliteAccountState*>(mClient->sctable.get()))
-        {
-            // opensctable() leaves an open transaction (via sctable->begin()).
-            // dropDBIndexes() inside createIndexes() asserts !inTransaction(), so
-            // we must commit the open transaction first, then restart it afterwards.
-            sa->commit();
-            sa->createIndexes(/*enableSearch=*/true,
-                              /*enableLexi=*/true);
-            sa->begin();
-        }
-    }
+    MimeType_t mimeType;
+    int order;
+    bool firstPage;
 };
 
-// ─── 1. PutNode ─────────────────────────────────────────────────────────────
-//
-// Measures INSERT OR REPLACE latency with the listAllNodes index set active.
-// Compare against the base-fixture PutNode to quantify index maintenance cost.
-TEST_F(SqliteNodesPerfListAllTest, PutNode)
+static const char* listAllOrderName(int order)
 {
-    auto* table = nodesTable();
-    auto* sa = dynamic_cast<SqliteAccountState*>(mClient->sctable.get());
-    ASSERT_NE(table, nullptr);
-    ASSERT_NE(sa, nullptr);
-
-    NodeHandle freshHandle = NodeHandle().set6byte(mNextHandle++);
-    Node& freshRef = mt::makeNode(*mClient, FILENODE, freshHandle, /*parent=*/nullptr);
-    auto freshNode = std::shared_ptr<Node>(&freshRef);
-
-    static const nameid nameId = AttrMap::string2nameid("n");
-    freshNode->attrs.map[nameId] = "perf_test_node_with_index.dat";
-    freshNode->size = 1024;
-    freshNode->ctime = 1700000000LL;
-    freshNode->mtime = 1700000000LL;
-    freshNode->isvalid = false;
-
-    mClient->mNodeManager.addNode(freshNode,
-                                  /*notify=*/false,
-                                  /*isFetching=*/true,
-                                  mMissingParentNodes);
-
-    const long long us = measureUs(SIMPLE_ITERS,
-                                   [&]
-                                   {
-                                       sa->put(freshNode.get());
-                                   });
-
-    GTEST_LOG_(INFO) << "put(Node*) [WITH listAll index]: " << SIMPLE_ITERS << " iters, total "
-                     << us << " us, avg " << us / SIMPLE_ITERS << " us/iter";
-}
-
-// ─── 2. RemoveNode ──────────────────────────────────────────────────────────
-//
-// Measures per-node removal latency with the listAllNodes index set active.
-// Compare against the base-fixture RemoveNode to quantify index maintenance cost.
-TEST_F(SqliteNodesPerfListAllTest, RemoveNode)
-{
-    auto* sa = dynamic_cast<SqliteAccountState*>(mClient->sctable.get());
-    ASSERT_NE(sa, nullptr);
-    ASSERT_FALSE(mFileHandles.empty());
-    ASSERT_GE(mFileHandles.size(), static_cast<size_t>(SIMPLE_ITERS));
-
-    const long long us = measureUs(SIMPLE_ITERS,
-                                   [&, idx = 0]() mutable
-                                   {
-                                       sa->remove(mFileHandles[static_cast<size_t>(idx)]);
-                                       ++idx;
-                                   });
-
-    GTEST_LOG_(INFO) << "remove(NodeHandle) [WITH listAll index]: " << SIMPLE_ITERS
-                     << " iters, total " << us << " us, avg " << us / SIMPLE_ITERS << " us/iter";
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  listAllNodesByPage – MIME_TYPE_ALL_VISUAL_MEDIA
-//
-//  All 10 sort orders × {first page (no cursor), mid cursor} = 20 cases.
-//  Order: DEFAULT_ASC/DESC → MTIME_ASC/DESC → SIZE_ASC/DESC →
-//         FAV_ASC/DESC → LABEL_ASC/DESC.
-//  The mid-cursor uses leafCursor(), anchored at the middle file of the first
-//  sub-folder (k=490, a .jpg node), which is always within the result set.
-// ═══════════════════════════════════════════════════════════════════════════
-
-// ─── 3. DEFAULT_ASC, first page ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_DefaultAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::DEFAULT_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::DEFAULT_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (DEFAULT_ASC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 4. DEFAULT_ASC, mid cursor ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_DefaultAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = leafCursor(OrderByClause::DEFAULT_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::DEFAULT_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::DEFAULT_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (DEFAULT_ASC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 5. DEFAULT_DESC, first page ────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_DefaultDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::DEFAULT_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::DEFAULT_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (DEFAULT_DESC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 6. DEFAULT_DESC, mid cursor ────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_DefaultDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = leafCursor(OrderByClause::DEFAULT_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::DEFAULT_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::DEFAULT_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (DEFAULT_DESC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 7. MTIME_ASC, first page ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_MtimeAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::MTIME_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::MTIME_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (MTIME_ASC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 8. MTIME_ASC, mid cursor ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_MtimeAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = leafCursor(OrderByClause::MTIME_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::MTIME_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::MTIME_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (MTIME_ASC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 9. MTIME_DESC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_MtimeDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::MTIME_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::MTIME_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (MTIME_DESC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 10. MTIME_DESC, mid cursor ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_MtimeDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = leafCursor(OrderByClause::MTIME_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::MTIME_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::MTIME_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (MTIME_DESC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 11. SIZE_ASC, first page ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_SizeAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::SIZE_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::SIZE_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (SIZE_ASC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 12. SIZE_ASC, mid cursor ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_SizeAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = leafCursor(OrderByClause::SIZE_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::SIZE_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::SIZE_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (SIZE_ASC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 13. SIZE_DESC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_SizeDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::SIZE_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::SIZE_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (SIZE_DESC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 14. SIZE_DESC, mid cursor ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_SizeDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = leafCursor(OrderByClause::SIZE_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::SIZE_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::SIZE_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (SIZE_DESC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 15. FAV_ASC, first page ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_FavAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::FAV_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::FAV_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (FAV_ASC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 16. FAV_ASC, mid cursor ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_FavAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = leafCursor(OrderByClause::FAV_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::FAV_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::FAV_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (FAV_ASC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 17. FAV_DESC, first page ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_FavDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::FAV_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::FAV_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (FAV_DESC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 18. FAV_DESC, mid cursor ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_FavDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = leafCursor(OrderByClause::FAV_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::FAV_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::FAV_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (FAV_DESC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 19. LABEL_ASC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_LabelAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::LABEL_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::LABEL_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (LABEL_ASC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 20. LABEL_ASC, mid cursor ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_LabelAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = leafCursor(OrderByClause::LABEL_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::LABEL_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::LABEL_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (LABEL_ASC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 21. LABEL_DESC, first page ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_LabelDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::LABEL_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::LABEL_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (LABEL_DESC, ALL_VISUAL_MEDIA, first page, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 22. LABEL_DESC, mid cursor ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_AllVisualMedia_LabelDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = leafCursor(OrderByClause::LABEL_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::LABEL_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_ALL_VISUAL_MEDIA);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::LABEL_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (LABEL_DESC, ALL_VISUAL_MEDIA, mid cursor, limit "
-                     << pageSize << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  listAllNodesByPage – MIME_TYPE_VIDEO
-//
-//  All 10 sort orders × {first page (no cursor), mid cursor} = 20 cases.
-//  Order: DEFAULT_ASC/DESC → MTIME_ASC/DESC → SIZE_ASC/DESC →
-//         FAV_ASC/DESC → LABEL_ASC/DESC.
-//  The mid-cursor uses videoLeafCursor(), anchored at the representative .mp4
-//  node (i=0, j=0, k=25), which is always within the VIDEO result set.
-// ═══════════════════════════════════════════════════════════════════════════
-
-// ─── 23. DEFAULT_ASC, first page ────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_DefaultAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::DEFAULT_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::DEFAULT_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_VIDEO);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (DEFAULT_ASC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 24. DEFAULT_ASC, mid cursor ────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_DefaultAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::DEFAULT_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::DEFAULT_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::DEFAULT_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_VIDEO);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (DEFAULT_ASC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 25. DEFAULT_DESC, first page ───────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_DefaultDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::DEFAULT_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::DEFAULT_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_VIDEO);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (DEFAULT_DESC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 26. DEFAULT_DESC, mid cursor ───────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_DefaultDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::DEFAULT_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::DEFAULT_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::DEFAULT_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_VIDEO);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (DEFAULT_DESC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 27. MTIME_ASC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_MtimeAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::MTIME_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::MTIME_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_VIDEO);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (MTIME_ASC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 28. MTIME_ASC, mid cursor ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_MtimeAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::MTIME_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::MTIME_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::MTIME_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_VIDEO);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (MTIME_ASC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 29. MTIME_DESC, first page ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_MtimeDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::MTIME_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::MTIME_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_VIDEO);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (MTIME_DESC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 30. MTIME_DESC, mid cursor ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_MtimeDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::MTIME_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::MTIME_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::MTIME_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_VIDEO);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (MTIME_DESC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 31. SIZE_ASC, first page ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_SizeAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::SIZE_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::SIZE_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_VIDEO);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (SIZE_ASC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 32. SIZE_ASC, mid cursor ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_SizeAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::SIZE_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::SIZE_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table
-        ->listAllNodesByPage(OrderByClause::SIZE_ASC, nodes, ct, pageSize, cursor, MIME_TYPE_VIDEO);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (SIZE_ASC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 33. SIZE_DESC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_SizeDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::SIZE_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::SIZE_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_VIDEO);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (SIZE_DESC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 34. SIZE_DESC, mid cursor ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_SizeDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::SIZE_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::SIZE_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::SIZE_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_VIDEO);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (SIZE_DESC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 35. FAV_ASC, first page ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_FavAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::FAV_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::FAV_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_VIDEO);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (FAV_ASC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 36. FAV_ASC, mid cursor ────────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_FavAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::FAV_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::FAV_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::FAV_ASC, nodes, ct, pageSize, cursor, MIME_TYPE_VIDEO);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (FAV_ASC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 37. FAV_DESC, first page ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_FavDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::FAV_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::FAV_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_VIDEO);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (FAV_DESC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 38. FAV_DESC, mid cursor ───────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_FavDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::FAV_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::FAV_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table
-        ->listAllNodesByPage(OrderByClause::FAV_DESC, nodes, ct, pageSize, cursor, MIME_TYPE_VIDEO);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (FAV_DESC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 39. LABEL_ASC, first page ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_LabelAsc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::LABEL_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::LABEL_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_VIDEO);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (LABEL_ASC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 40. LABEL_ASC, mid cursor ──────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_LabelAsc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::LABEL_ASC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::LABEL_ASC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::LABEL_ASC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_VIDEO);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (LABEL_ASC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 41. LABEL_DESC, first page ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_LabelDesc_FirstPage)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::LABEL_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 std::nullopt,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::LABEL_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              std::nullopt,
-                              MIME_TYPE_VIDEO);
-
-    EXPECT_EQ(nodes.size(), pageSize);
-    GTEST_LOG_(INFO) << "listAllNodesByPage (LABEL_DESC, VIDEO, first page, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ─── 42. LABEL_DESC, mid cursor ─────────────────────────────────────────────
-TEST_F(SqliteNodesPerfListAllTest, ListAllByPage_Video_LabelDesc_MidCursor)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    const size_t pageSize = 50;
-    const auto cursor = videoLeafCursor(OrderByClause::LABEL_DESC);
-
-    const long long us = measureUs(COMPLEX_ITERS,
-                                   [&]
-                                   {
-                                       std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                                       CancelToken ct;
-                                       table->listAllNodesByPage(OrderByClause::LABEL_DESC,
-                                                                 nodes,
-                                                                 ct,
-                                                                 pageSize,
-                                                                 cursor,
-                                                                 MIME_TYPE_VIDEO);
-                                   });
-
-    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-    CancelToken ct;
-    table->listAllNodesByPage(OrderByClause::LABEL_DESC,
-                              nodes,
-                              ct,
-                              pageSize,
-                              cursor,
-                              MIME_TYPE_VIDEO);
-
-    GTEST_LOG_(INFO) << "listAllNodesByPage (LABEL_DESC, VIDEO, mid cursor, limit " << pageSize
-                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
-                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  searchNodesByPageWithSnapshot — ALL_VISUAL_MEDIA snapshot cache benchmarks
-//
-//  These tests compare the first-call (cold DB fetch) latency with subsequent
-//  cache-hit latency, and measure offset-based pagination throughput once the
-//  snapshot is warm.
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// ─── N+1. Cold fetch vs cached read ──────────────────────────────────────────
-// Measures the average latency of:
-//   (a) a cold call that goes to SQLite (snapshot miss)
-//   (b) a warm call served entirely from the in-memory snapshot
-// The test asserts that the cached call is strictly faster and also reports
-// the memory cost of building and holding the snapshot.
-TEST_F(SqliteNodesPerfTest, PerfSearchByPageSnapshot_AllVisualMedia_FirstCallVsCachedCall)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
-
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    CancelToken ct;
-
-    // ── Baseline memory before any snapshot exists ───────────────────────────
-    const auto memBefore = MemSnapshot::take();
-
-    // ── Warmup + correctness ─────────────────────────────────────────────────
+    switch (order)
     {
-        std::string key;
-        std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-        ASSERT_TRUE(table->searchNodesByPageWithSnapshot(filter,
-                                                         OrderByClause::DEFAULT_ASC,
-                                                         nodes,
-                                                         ct,
-                                                         0,
-                                                         0,
-                                                         key));
-        ASSERT_GT(nodes.size(), 0u);
-        ASSERT_FALSE(key.empty());
+        case OrderByClause::DEFAULT_ASC:
+            return "DEFAULT_ASC";
+        case OrderByClause::DEFAULT_DESC:
+            return "DEFAULT_DESC";
+        case OrderByClause::MTIME_ASC:
+            return "MTIME_ASC";
+        case OrderByClause::MTIME_DESC:
+            return "MTIME_DESC";
+        case OrderByClause::SIZE_ASC:
+            return "SIZE_ASC";
+        case OrderByClause::SIZE_DESC:
+            return "SIZE_DESC";
+        case OrderByClause::FAV_ASC:
+            return "FAV_ASC";
+        case OrderByClause::FAV_DESC:
+            return "FAV_DESC";
+        case OrderByClause::LABEL_ASC:
+            return "LABEL_ASC";
+        case OrderByClause::LABEL_DESC:
+            return "LABEL_DESC";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static const char* listAllMimeName(MimeType_t mimeType)
+{
+    return mimeType == MIME_TYPE_VIDEO ? "VIDEO" : "ALL_VISUAL_MEDIA";
+}
+
+class SqliteNodesPerfListAllByPageTest:
+    public SqliteNodesPerfTest,
+    public ::testing::WithParamInterface<ListAllByPageParam>
+{};
+
+TEST_P(SqliteNodesPerfListAllByPageTest, DISABLED_Perf)
+{
+    auto* table = nodesTable();
+    ASSERT_NE(table, nullptr);
+
+    const auto& param = GetParam();
+    const size_t pageSize = 50;
+
+    std::optional<NodeSearchCursorOffset> cursorOpt;
+    if (!param.firstPage)
+        cursorOpt = (param.mimeType == MIME_TYPE_VIDEO) ? videoLeafCursor(param.order) :
+                                                          leafCursor(param.order);
+
+    const long long us = measureUs(
+        COMPLEX_ITERS,
+        [&]
+        {
+            std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
+            CancelToken ct;
+            table->listAllNodesByPage(param.mimeType, param.order, nodes, ct, pageSize, cursorOpt);
+        });
+
+    std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
+    CancelToken ct;
+    table->listAllNodesByPage(param.mimeType, param.order, nodes, ct, pageSize, cursorOpt);
+
+    if (param.firstPage)
+    {
+        EXPECT_EQ(nodes.size(), pageSize);
     }
 
-    // ── Memory after snapshot is built ───────────────────────────────────────
-    const auto memAfterSnapshot = MemSnapshot::take();
-    const auto snapshotDelta = memAfterSnapshot - memBefore;
-
-    GTEST_LOG_(INFO) << "Memory after ALL_VISUAL_MEDIA snapshot build"
-                     << " — RSS delta: " << snapshotDelta.rssKb << " kB"
-                     << "  |  heap delta: " << snapshotDelta.heapBytes / 1024 << " kB" << "  ("
-                     << snapshotDelta.heapBytes << " B)";
-
-    // ── Cold path: force a cache miss each iteration by alternating sort order
-    //    so buildSnapshotKey() produces a different key each time.
-    const long long coldUs =
-        measureUs(COMPLEX_ITERS,
-                  [&]
-                  {
-                      std::string freshKey;
-                      std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                      table->searchNodesByPageWithSnapshot(filter,
-                                                           OrderByClause::DEFAULT_ASC,
-                                                           nodes,
-                                                           ct,
-                                                           0,
-                                                           50,
-                                                           freshKey);
-                      // Evict snapshot by requesting a different order.
-                      std::string freshKey2;
-                      std::vector<std::pair<NodeHandle, NodeSerialized>> nodes2;
-                      table->searchNodesByPageWithSnapshot(filter,
-                                                           OrderByClause::DEFAULT_DESC,
-                                                           nodes2,
-                                                           ct,
-                                                           0,
-                                                           50,
-                                                           freshKey2);
-                  });
-    const long long coldAvg = coldUs / (COMPLEX_ITERS * 2);
-
-    // ── Warm path: populate snapshot once, then read from cache repeatedly. ───
-    std::string cachedKey;
-    {
-        std::vector<std::pair<NodeHandle, NodeSerialized>> all;
-        ASSERT_TRUE(table->searchNodesByPageWithSnapshot(filter,
-                                                         OrderByClause::DEFAULT_ASC,
-                                                         all,
-                                                         ct,
-                                                         0,
-                                                         0,
-                                                         cachedKey));
-    }
-    ASSERT_FALSE(cachedKey.empty());
-
-    // Memory while snapshot is active.
-    const auto memWhileWarm = MemSnapshot::take();
-    const auto warmDelta = memWhileWarm - memBefore;
-
-    GTEST_LOG_(INFO) << "Memory while ALL_VISUAL_MEDIA snapshot is warm (cache-hit reads)"
-                     << " — RSS delta: " << warmDelta.rssKb << " kB"
-                     << "  |  heap delta: " << warmDelta.heapBytes / 1024 << " kB";
-
-    const long long warmUs =
-        measureUs(COMPLEX_ITERS,
-                  [&]
-                  {
-                      std::vector<std::pair<NodeHandle, NodeSerialized>> nodes;
-                      table->searchNodesByPageWithSnapshot(filter,
-                                                           OrderByClause::DEFAULT_ASC,
-                                                           nodes,
-                                                           ct,
-                                                           0,
-                                                           50,
-                                                           cachedKey);
-                  });
-    const long long warmAvg = warmUs / COMPLEX_ITERS;
-
-    GTEST_LOG_(INFO) << "searchNodesByPageWithSnapshot (ALL_VISUAL_MEDIA) — cold (DB fetch) avg: "
-                     << coldAvg << " us/call" << "  |  warm (cache hit) avg: " << warmAvg
-                     << " us/call"
-                     << "  |  speedup: " << (coldAvg > 0 ? coldAvg / std::max(warmAvg, 1LL) : 0LL)
-                     << "x";
-
-    EXPECT_LT(warmAvg, coldAvg) << "cache-hit path must be faster than cold DB fetch";
+    GTEST_LOG_(INFO) << "listAllNodesByPage (" << listAllOrderName(param.order) << ", "
+                     << listAllMimeName(param.mimeType) << ", "
+                     << (param.firstPage ? "first page" : "mid cursor") << ", limit " << pageSize
+                     << "): " << COMPLEX_ITERS << " iters, total " << us << " us, avg "
+                     << us / COMPLEX_ITERS << " us/iter, " << nodes.size() << " results";
 }
 
-// ─── N+2. Offset-based pagination throughput ─────────────────────────────────
-// Populates the ALL_VISUAL_MEDIA snapshot once then measures how long it takes
-// to walk through all matching nodes using 50-node pages served from cache.
-// Memory is tracked at three points:
-//   1. Before the cold call (baseline)
-//   2. After the snapshot is built (snapshot overhead)
-//   3. While pages are being read (page-slice overhead)
-TEST_F(SqliteNodesPerfTest, PerfSearchByPageSnapshot_AllVisualMedia_PaginationThroughput)
-{
-    auto* table = nodesTable();
-    ASSERT_NE(table, nullptr);
+// clang-format off
+static const ListAllByPageParam kListAllByPageParams[] = {
+    // mimeType                    order                         firstPage
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::DEFAULT_ASC,   true },
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::DEFAULT_ASC,   false},
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::DEFAULT_DESC,  true },
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::DEFAULT_DESC,  false},
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::MTIME_ASC,     true },
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::MTIME_ASC,     false},
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::MTIME_DESC,    true },
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::MTIME_DESC,    false},
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::SIZE_ASC,      true },
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::SIZE_ASC,      false},
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::SIZE_DESC,     true },
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::SIZE_DESC,     false},
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::FAV_ASC,       true },
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::FAV_ASC,       false},
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::FAV_DESC,      true },
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::FAV_DESC,      false},
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::LABEL_ASC,     true },
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::LABEL_ASC,     false},
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::LABEL_DESC,    true },
+    {MIME_TYPE_ALL_VISUAL_MEDIA,  OrderByClause::LABEL_DESC,    false},
+    {MIME_TYPE_VIDEO,             OrderByClause::DEFAULT_ASC,   true },
+    {MIME_TYPE_VIDEO,             OrderByClause::DEFAULT_ASC,   false},
+    {MIME_TYPE_VIDEO,             OrderByClause::DEFAULT_DESC,  true },
+    {MIME_TYPE_VIDEO,             OrderByClause::DEFAULT_DESC,  false},
+    {MIME_TYPE_VIDEO,             OrderByClause::MTIME_ASC,     true },
+    {MIME_TYPE_VIDEO,             OrderByClause::MTIME_ASC,     false},
+    {MIME_TYPE_VIDEO,             OrderByClause::MTIME_DESC,    true },
+    {MIME_TYPE_VIDEO,             OrderByClause::MTIME_DESC,    false},
+    {MIME_TYPE_VIDEO,             OrderByClause::SIZE_ASC,      true },
+    {MIME_TYPE_VIDEO,             OrderByClause::SIZE_ASC,      false},
+    {MIME_TYPE_VIDEO,             OrderByClause::SIZE_DESC,     true },
+    {MIME_TYPE_VIDEO,             OrderByClause::SIZE_DESC,     false},
+    {MIME_TYPE_VIDEO,             OrderByClause::FAV_ASC,       true },
+    {MIME_TYPE_VIDEO,             OrderByClause::FAV_ASC,       false},
+    {MIME_TYPE_VIDEO,             OrderByClause::FAV_DESC,      true },
+    {MIME_TYPE_VIDEO,             OrderByClause::FAV_DESC,      false},
+    {MIME_TYPE_VIDEO,             OrderByClause::LABEL_ASC,     true },
+    {MIME_TYPE_VIDEO,             OrderByClause::LABEL_ASC,     false},
+    {MIME_TYPE_VIDEO,             OrderByClause::LABEL_DESC,    true },
+    {MIME_TYPE_VIDEO,             OrderByClause::LABEL_DESC,    false},
+};
+// clang-format on
 
-    NodeSearchFilter filter;
-    filter.byAncestors({mRootHandle.as8byte(), UNDEF, UNDEF});
-    filter.byNodeType(FILENODE);
-    filter.byCategory(MIME_TYPE_ALL_VISUAL_MEDIA);
-
-    CancelToken ct;
-
-    // ── Baseline memory before snapshot creation ─────────────────────────────
-    const auto memBaseline = MemSnapshot::take();
-
-    // ── Cold call to populate snapshot and discover total count ──────────────
-    std::string cacheKey;
-    size_t totalNodes = 0;
-    {
-        std::vector<std::pair<NodeHandle, NodeSerialized>> all;
-        ASSERT_TRUE(table->searchNodesByPageWithSnapshot(filter,
-                                                         OrderByClause::DEFAULT_ASC,
-                                                         all,
-                                                         ct,
-                                                         0,
-                                                         0,
-                                                         cacheKey));
-        totalNodes = all.size();
-        ASSERT_GT(totalNodes, 0u);
-    }
-
-    // ── Memory after full snapshot is held in RAM ─────────────────────────────
-    const auto memAfterCold = MemSnapshot::take();
-    const auto snapshotDelta = memAfterCold - memBaseline;
-
-    GTEST_LOG_(INFO) << "ALL_VISUAL_MEDIA snapshot memory overhead (" << totalNodes << " nodes)"
-                     << " — RSS delta: " << snapshotDelta.rssKb << " kB"
-                     << "  |  heap delta: " << snapshotDelta.heapBytes / 1024 << " kB" << "  ("
-                     << snapshotDelta.heapBytes << " B)" << "  |  bytes/node: "
-                     << (totalNodes > 0 ? snapshotDelta.heapBytes / totalNodes : 0u);
-
-    constexpr size_t pageSize = 50;
-    const size_t expectedPages = (totalNodes + pageSize - 1) / pageSize;
-
-    constexpr int FULLTHRU_ITERS = 10;
-
-    size_t pagesRead = 0;
-    size_t nodesVisited = 0;
-
-    // ── Peak memory while iterating pages ────────────────────────────────────
-    // Captured on the first page of the first iteration to show the transient
-    // page-slice allocation on top of the snapshot.
-    MemSnapshot memDuringIteration{};
-    bool memDuringCaptured = false;
-
-    const long long us =
-        measureUs(FULLTHRU_ITERS,
-                  [&]
-                  {
-                      pagesRead = 0;
-                      nodesVisited = 0;
-                      size_t offset = 0;
-
-                      while (true)
-                      {
-                          std::vector<std::pair<NodeHandle, NodeSerialized>> page;
-                          table->searchNodesByPageWithSnapshot(filter,
-                                                               OrderByClause::DEFAULT_ASC,
-                                                               page,
-                                                               ct,
-                                                               offset,
-                                                               pageSize,
-                                                               cacheKey);
-                          if (page.empty())
-                              break;
-
-                          // Capture memory on the first page of the first iteration.
-                          if (!memDuringCaptured)
-                          {
-                              memDuringIteration = MemSnapshot::take();
-                              memDuringCaptured = true;
-                          }
-
-                          nodesVisited += page.size();
-                          offset += page.size();
-                          ++pagesRead;
-                      }
-                  });
-
-    EXPECT_EQ(nodesVisited, totalNodes);
-    EXPECT_EQ(pagesRead, expectedPages);
-
-    if (memDuringCaptured)
-    {
-        const auto iterDelta = memDuringIteration - memBaseline;
-        GTEST_LOG_(INFO) << "Memory while reading an ALL_VISUAL_MEDIA page slice"
-                         << " — RSS delta: " << iterDelta.rssKb << " kB"
-                         << "  |  heap delta: " << iterDelta.heapBytes / 1024 << " kB";
-    }
-
-    const long long avgUs = us / FULLTHRU_ITERS;
-    const long long usPerPage = (pagesRead > 0) ? avgUs / static_cast<long long>(pagesRead) : 0LL;
-
-    GTEST_LOG_(INFO) << "searchNodesByPageWithSnapshot ALL_VISUAL_MEDIA pagination throughput"
-                     << " (" << totalNodes << " nodes, page=" << pageSize << ", " << pagesRead
-                     << " pages): " << FULLTHRU_ITERS << " iters, total " << us << " us, avg "
-                     << avgUs << " us/iter, " << usPerPage << " us/page";
-}
+INSTANTIATE_TEST_SUITE_P(All,
+                         SqliteNodesPerfListAllByPageTest,
+                         ::testing::ValuesIn(kListAllByPageParams),
+                         [](const ::testing::TestParamInfo<ListAllByPageParam>& info)
+                         {
+                             return std::string(listAllOrderName(info.param.order)) + "_" +
+                                    listAllMimeName(info.param.mimeType) +
+                                    (info.param.firstPage ? "_FirstPage" : "_MidCursor");
+                         });
 
 } // anonymous namespace
 

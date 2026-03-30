@@ -56,24 +56,49 @@ struct MegaSearchLexicographicalOffset
     std::optional<MegaHandle> mLastHandle{};
 };
 
+#ifdef WIN32
+const char MEGA_DEBRIS_FOLDER[] = "Rubbish";
+#else
+const char MEGA_DEBRIS_FOLDER[] = ".debris";
+#endif
+
 /**
- * @brief Cursor position for cursor-based (keyset) pagination in MegaApi::searchByPage().
+ * @brief INVALID_HANDLE Invalid value for a handle
+ *
+ * This value is used to represent an invalid handle. Several MEGA objects can have
+ * a handle but it will never be mega::INVALID_HANDLE
+ *
+ */
+const MegaHandle INVALID_HANDLE = ~(MegaHandle)0;
+const MegaTimeStamp MEGA_INVALID_TIMESTAMP = 0;
+
+/**
+ * @brief Cursor position for cursor-based (keyset) pagination in MegaApi::listAllNodesByPage().
  *
  * Build this from the last MegaNode returned in the previous page.
  * The optional sort-key fields that must be populated depend on the sort order:
  *
- *   ORDER_DEFAULT_ASC / ORDER_DEFAULT_DESC     : mLastName, mLastType, mLastHandle
- *   ORDER_SIZE_ASC    / ORDER_SIZE_DESC        : above + mLastSize
- *   ORDER_MODIFICATION_ASC / _DESC             : above + mLastMtime
- *   ORDER_LABEL_ASC / ORDER_LABEL_DESC         : mLastName, mLastType, mLastHandle, mLastLabel
- *   ORDER_FAV_ASC   / ORDER_FAV_DESC           : mLastName, mLastType, mLastHandle, mLastFav
+ *   ORDER_DEFAULT_ASC / ORDER_DEFAULT_DESC     : mLastName, mLastHandle
+ *   ORDER_SIZE_ASC    / ORDER_SIZE_DESC        : mLastName, mLastHandle, mLastSize
+ *   ORDER_MODIFICATION_ASC / _DESC             : mLastName, mLastHandle, mLastMtime
+ *   ORDER_LABEL_ASC / ORDER_LABEL_DESC         : mLastName, mLastHandle, mLastLabel
+ *   ORDER_FAV_ASC   / ORDER_FAV_DESC           : mLastName, mLastHandle, mLastFav
+ *
+ * Note on ORDER_FAV_ASC / ORDER_FAV_DESC naming:
+ *   Despite the "ASC" / "DESC" suffix, both orders sort non-favourites and
+ *   favourites into distinct groups rather than a simple numeric ascending /
+ *   descending sequence:
+ *     ORDER_FAV_ASC  – favourites appear FIRST, then non-favourites
+ *                      (SQL: ORDER BY fav DESC, name ASC)
+ *     ORDER_FAV_DESC – non-favourites appear FIRST, then favourites
+ *                      (SQL: ORDER BY fav ASC,  name ASC)
+ *   This naming follows the same convention used throughout the rest of MegaApi.
  *
  * Example (obtaining cursor from last node on a page):
  * @code
  *   MegaNode* last = nodeList->get(nodeList->size() - 1);
  *   MegaSearchCursorOffset cursor;
  *   cursor.mLastName   = last->getName();
- *   cursor.mLastType   = last->getType();
  *   cursor.mLastHandle = last->getHandle();
  *   cursor.mLastSize   = last->getSize();   // when using ORDER_SIZE_ASC/DESC
  * @endcode
@@ -81,30 +106,13 @@ struct MegaSearchLexicographicalOffset
 struct MegaSearchCursorOffset
 {
     std::string mLastName;
-    int mLastType = 0;
-    MegaHandle mLastHandle = ~(MegaHandle)0; // INVALID_HANDLE
+    MegaHandle mLastHandle = INVALID_HANDLE; // INVALID_HANDLE
 
     std::optional<int64_t> mLastSize; ///< For ORDER_SIZE_ASC / ORDER_SIZE_DESC
     std::optional<int64_t> mLastMtime; ///< For ORDER_MODIFICATION_ASC / ORDER_MODIFICATION_DESC
     std::optional<int> mLastLabel; ///< For ORDER_LABEL_ASC / ORDER_LABEL_DESC
     std::optional<int> mLastFav; ///< For ORDER_FAV_ASC / ORDER_FAV_DESC
 };
-
-#ifdef WIN32
-    const char MEGA_DEBRIS_FOLDER[] = "Rubbish";
-#else
-    const char MEGA_DEBRIS_FOLDER[] = ".debris";
-#endif
-
-    /**
-     * @brief INVALID_HANDLE Invalid value for a handle
-     *
-     * This value is used to represent an invalid handle. Several MEGA objects can have
-     * a handle but it will never be mega::INVALID_HANDLE
-     *
-     */
-    const MegaHandle INVALID_HANDLE = ~(MegaHandle)0;
-    const MegaTimeStamp MEGA_INVALID_TIMESTAMP = 0;
 
 class MegaListener;
 class MegaRequestListener;
@@ -18808,22 +18816,24 @@ class MegaApi
             ORDER_SHARE_CREATION_DESC = 22,
         };
 
-        enum { FILE_TYPE_DEFAULT = 0, // FILE_TYPE_UNKNOWN already exists at WinBase.h
-               FILE_TYPE_PHOTO,
-               FILE_TYPE_AUDIO,
-               FILE_TYPE_VIDEO,
-               FILE_TYPE_DOCUMENT,
-               FILE_TYPE_PDF,
-               FILE_TYPE_PRESENTATION,
-               FILE_TYPE_ARCHIVE,
-               FILE_TYPE_PROGRAM,
-               FILE_TYPE_MISC,
-               FILE_TYPE_SPREADSHEET,
-               FILE_TYPE_ALL_DOCS, // any of {DOCUMENT, PDF, PRESENTATION, SPREADSHEET}
-               FILE_TYPE_OTHERS,
-               FILE_TYPE_ALL_VISUAL_MEDIA, // any of {PHOTO, VIDEO}
-               FILE_TYPE_LAST = FILE_TYPE_ALL_VISUAL_MEDIA,
-             };
+        enum
+        {
+            FILE_TYPE_DEFAULT = 0, // FILE_TYPE_UNKNOWN already exists at WinBase.h
+            FILE_TYPE_PHOTO,
+            FILE_TYPE_AUDIO,
+            FILE_TYPE_VIDEO,
+            FILE_TYPE_DOCUMENT,
+            FILE_TYPE_PDF,
+            FILE_TYPE_PRESENTATION,
+            FILE_TYPE_ARCHIVE,
+            FILE_TYPE_PROGRAM,
+            FILE_TYPE_MISC,
+            FILE_TYPE_SPREADSHEET,
+            FILE_TYPE_ALL_DOCS, // any of {DOCUMENT, PDF, PRESENTATION, SPREADSHEET}
+            FILE_TYPE_OTHERS,
+            FILE_TYPE_ALL_VISUAL_MEDIA, // any of {PHOTO, VIDEO}
+            FILE_TYPE_LAST = FILE_TYPE_ALL_VISUAL_MEDIA,
+        };
 
         enum { SEARCH_TARGET_INSHARE = 0,
                SEARCH_TARGET_OUTSHARE,
@@ -20151,45 +20161,9 @@ class MegaApi
         MegaNodeList* search(const MegaSearchFilter* filter, int order = ORDER_NONE, MegaCancelToken* cancelToken = nullptr, const MegaSearchPage* searchPage = nullptr);
 
         /**
-         * @brief Search nodes using cursor-based (keyset) pagination across the entire drive.
+         * @brief List all nodes using cursor-based pagination with MIME type filtering.
          *
-         * Unlike search() which uses offset + size pagination, this method accepts a cursor derived
-         * from the last node returned on the previous page.  This guarantees that no nodes are
-         * skipped or duplicated even when nodes are deleted between page requests.
-         *
-         * Supported sort orders:
-         *   - ORDER_DEFAULT_ASC  / ORDER_DEFAULT_DESC
-         *   - ORDER_SIZE_ASC     / ORDER_SIZE_DESC
-         *   - ORDER_MODIFICATION_ASC / ORDER_MODIFICATION_DESC
-         *   - ORDER_LABEL_ASC    / ORDER_LABEL_DESC
-         *   - ORDER_FAV_ASC      / ORDER_FAV_DESC
-         *
-         * To retrieve subsequent pages, construct a MegaSearchCursorOffset from the last node in
-         * the returned list and pass it as the @p cursor argument.  See MegaSearchCursorOffset for
-         * the fields that must be populated for each sort order.
-         *
-         * The returned list is empty when there are no more results.
-         *
-         * @param filter       Filter criteria (same as search()); must not be null.
-         * @param order        Sort order constant (see above for supported values).
-         * @param cancelToken  Optional cancellation token; may be null.
-         * @param maxElements  Maximum number of nodes to return in one page (0 = no limit).
-         * @param cursor       Cursor from the last node of the previous page, or nullptr for the
-         *                     first page.
-         *
-         * @return List of matching MegaNode objects, or an empty list when there are no more
-         *         results.  The caller takes ownership and must delete the returned object.
-         */
-        MegaNodeList* searchByPage(const MegaSearchFilter* filter,
-                                   int order = ORDER_DEFAULT_ASC,
-                                   MegaCancelToken* cancelToken = nullptr,
-                                   size_t maxElements = 0,
-                                   const MegaSearchCursorOffset* cursor = nullptr);
-
-        /**
-         * @brief List all nodes using cursor-based pagination, with optional MIME type filtering.
-         *
-         * Unlike search() / searchByPage() which traverse a subtree, this method queries the
+         * Unlike search() which traverses a subtree, this method queries the
          * entire nodes table with a simple flat query.  This makes it significantly faster for
          * global pagination use-cases.
          *
@@ -20212,24 +20186,27 @@ class MegaApi
          *   megaApi->enableSearchDBIndexes(true);
          * @endcode
          *
+         * @param mimeType     Mandatory MIME type category filter (see FILE_TYPE_* constants).
+         *                     Must be one of FILE_TYPE_PHOTO, FILE_TYPE_AUDIO, FILE_TYPE_VIDEO,
+         *                     FILE_TYPE_DOCUMENT, FILE_TYPE_PDF, FILE_TYPE_PRESENTATION,
+         *                     FILE_TYPE_ARCHIVE, FILE_TYPE_PROGRAM, FILE_TYPE_MISC,
+         *                     FILE_TYPE_SPREADSHEET, FILE_TYPE_OTHERS, FILE_TYPE_ALL_DOCS, or
+         *                     FILE_TYPE_ALL_VISUAL_MEDIA.  FILE_TYPE_DEFAULT is not valid.
          * @param order        Sort order constant (see supported values above).
          *                     Defaults to ORDER_DEFAULT_ASC.
          * @param cancelToken  Optional cancellation token; may be null.
          * @param maxElements  Maximum number of nodes to return per page (0 = no limit).
          * @param cursor       Cursor from the last node of the previous page, or nullptr for the
          *                     first page.
-         * @param mimeType     MIME type category filter.  Pass MegaApi::FILE_TYPE_DEFAULT (0) to
-         *                     disable MIME filtering.  Supported values mirror MegaSearchFilter's
-         *                     byCategory values (e.g. FILE_TYPE_PHOTO, FILE_TYPE_AUDIO, …).
          *
          * @return List of MegaNode objects for this page, or an empty list when there are no more
          *         results.  The caller takes ownership and must delete the returned object.
          */
-        MegaNodeList* listAllNodesByPage(int order,
+        MegaNodeList* listAllNodesByPage(int mimeType,
+                                         int order,
                                          MegaCancelToken* cancelToken,
                                          size_t maxElements,
-                                         const MegaSearchCursorOffset* cursor,
-                                         int mimeType);
+                                         const MegaSearchCursorOffset* cursor);
 
         /**
          * @brief Get a list of buckets, each bucket containing a list of recently added/modified

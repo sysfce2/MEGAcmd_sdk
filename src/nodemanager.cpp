@@ -802,7 +802,10 @@ sharedNode_vector NodeManager::searchNodes(const NodeSearchFilter& filter, int o
     return searchNodes_internal(filter, order, cancelFlag, page);
 }
 
-sharedNode_vector NodeManager::searchNodes_internal(const NodeSearchFilter& filter, int order, CancelToken cancelFlag, const NodeSearchPage& page)
+sharedNode_vector NodeManager::searchNodes_internal(const NodeSearchFilter& filter,
+                                                    int order,
+                                                    CancelToken cancelFlag,
+                                                    const NodeSearchPage& page)
 {
     assert(mMutex.owns_lock());
 
@@ -841,124 +844,26 @@ sharedNode_vector NodeManager::searchNodes_internal(const NodeSearchFilter& filt
 }
 
 sharedNode_vector
-    NodeManager::searchNodesByPage(const NodeSearchFilter& filter,
-                                   int order,
-                                   CancelToken cancelFlag,
-                                   size_t maxElements,
-                                   const std::optional<NodeSearchCursorOffset>& cursor)
-{
-    LockGuard g(mMutex);
-    return searchNodesByPage_internal(filter, order, cancelFlag, maxElements, cursor);
-}
-
-sharedNode_vector
-    NodeManager::searchNodesByPage_internal(const NodeSearchFilter& filter,
-                                            int order,
-                                            CancelToken cancelFlag,
-                                            size_t maxElements,
-                                            const std::optional<NodeSearchCursorOffset>& cursor)
-{
-    assert(mMutex.owns_lock());
-
-    if (!mTable || mNodes.empty())
-    {
-        assert(mTable && !mNodes.empty());
-        return sharedNode_vector();
-    }
-
-    // Same early-exit optimisation as searchNodes_internal: if the search root
-    // is itself sensitivity-filtered and all ancestor roots are sensitive, there
-    // can be no results.
-    const vector<handle>& ancestors = filter.byAncestorHandles();
-    if (filter.bySensitivity() == NodeSearchFilter::BoolFilter::onlyTrue &&
-        filter.includedShares() == NO_SHARES &&
-        std::all_of(ancestors.begin(),
-                    ancestors.end(),
-                    [this](handle a)
-                    {
-                        shared_ptr<Node> node = getNodeByHandle_internal(NodeHandle().set6byte(a));
-                        return node && node->isSensitiveInherited();
-                    }))
-    {
-        return sharedNode_vector();
-    }
-
-    vector<pair<NodeHandle, NodeSerialized>> nodesFromTable;
-    if (!mTable->searchNodesByPage(filter, order, nodesFromTable, cancelFlag, maxElements, cursor))
-    {
-        return sharedNode_vector();
-    }
-
-    return processUnserializedNodes(nodesFromTable, cancelFlag);
-}
-
-sharedNode_vector NodeManager::searchNodesByPageWithSnapshot(const NodeSearchFilter& filter,
-                                                             int order,
-                                                             CancelToken cancelFlag,
-                                                             size_t pageOffset,
-                                                             size_t pageSize,
-                                                             std::string& cacheKey)
-{
-    LockGuard g(mMutex);
-    return searchNodesByPageWithSnapshot_internal(filter,
-                                                  order,
-                                                  cancelFlag,
-                                                  pageOffset,
-                                                  pageSize,
-                                                  cacheKey);
-}
-
-sharedNode_vector
-    NodeManager::searchNodesByPageWithSnapshot_internal(const NodeSearchFilter& filter,
-                                                        int order,
-                                                        CancelToken cancelFlag,
-                                                        size_t pageOffset,
-                                                        size_t pageSize,
-                                                        std::string& cacheKey)
-{
-    assert(mMutex.owns_lock());
-
-    if (!mTable || mNodes.empty())
-    {
-        assert(mTable && !mNodes.empty());
-        return sharedNode_vector();
-    }
-
-    vector<pair<NodeHandle, NodeSerialized>> nodesFromTable;
-    if (!mTable->searchNodesByPageWithSnapshot(filter,
-                                               order,
-                                               nodesFromTable,
-                                               cancelFlag,
-                                               pageOffset,
-                                               pageSize,
-                                               cacheKey))
-    {
-        return sharedNode_vector();
-    }
-
-    return processUnserializedNodes(nodesFromTable, cancelFlag);
-}
-
-sharedNode_vector
-    NodeManager::listAllNodesByPage(int order,
+    NodeManager::listAllNodesByPage(MimeType_t mimeType,
+                                    int order,
                                     CancelToken cancelFlag,
                                     size_t maxElements,
-                                    const std::optional<NodeSearchCursorOffset>& cursor,
-                                    MimeType_t mimeType)
+                                    const std::optional<NodeSearchCursorOffset>& cursor)
 {
     LockGuard g(mMutex);
-    return listAllNodesByPage_internal(order, cancelFlag, maxElements, cursor, mimeType);
+    return listAllNodesByPage_internal(mimeType, order, cancelFlag, maxElements, cursor);
 }
 
 sharedNode_vector
-    NodeManager::listAllNodesByPage_internal(int order,
+    NodeManager::listAllNodesByPage_internal(MimeType_t mimeType,
+                                             int order,
                                              CancelToken cancelFlag,
                                              size_t maxElements,
-                                             const std::optional<NodeSearchCursorOffset>& cursor,
-                                             MimeType_t mimeType)
+                                             const std::optional<NodeSearchCursorOffset>& cursor)
 {
     assert(mMutex.owns_lock());
 
+    // validation
     if (!mTable || mNodes.empty())
     {
         assert(mTable && !mNodes.empty());
@@ -967,7 +872,7 @@ sharedNode_vector
 
     vector<pair<NodeHandle, NodeSerialized>> nodesFromTable;
     if (!mTable
-             ->listAllNodesByPage(order, nodesFromTable, cancelFlag, maxElements, cursor, mimeType))
+             ->listAllNodesByPage(mimeType, order, nodesFromTable, cancelFlag, maxElements, cursor))
     {
         return sharedNode_vector();
     }

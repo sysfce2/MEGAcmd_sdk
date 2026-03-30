@@ -13300,103 +13300,52 @@ sharedNode_vector MegaApiImpl::searchInNodeManager(const MegaSearchFilter* filte
     return results;
 }
 
-MegaNodeList* MegaApiImpl::searchByPage(const MegaSearchFilter* filter,
-                                        int order,
-                                        CancelToken cancelToken,
-                                        size_t maxElements,
-                                        const MegaSearchCursorOffset* cursor)
+MegaNodeList* MegaApiImpl::listAllNodesByPage(int mimeType,
+                                              int order,
+                                              CancelToken cancelToken,
+                                              size_t maxElements,
+                                              const MegaSearchCursorOffset* megaCursor)
 {
-    assert((MegaApi::ORDER_NONE <= order && order <= MegaApi::ORDER_MODIFICATION_DESC) ||
-           (MegaApi::ORDER_LABEL_ASC <= order && order <= MegaApi::ORDER_FAV_DESC));
-
-    if (!filter || (filter->byNodeType() == MegaNode::TYPE_FOLDER &&
-                    filter->byCategory() != MegaApi::FILE_TYPE_DEFAULT))
+    if (mimeType <= MegaApi::FILE_TYPE_DEFAULT || mimeType > MegaApi::FILE_TYPE_LAST)
     {
+        LOG_err << "listAllNodesByPage: invalid mimeType value " << mimeType;
         return new MegaNodeListPrivate();
     }
 
-    sharedNode_vector searchResults;
-
+    std::optional<NodeSearchCursorOffset> cursor;
+    if (megaCursor)
     {
-        SdkMutexGuard g(sdkMutex);
-
-        switch (filter->byLocation())
+        bool cursorCompatible = true;
+        switch (order)
         {
-            case MegaApi::SEARCH_TARGET_ALL:
-            case MegaApi::SEARCH_TARGET_ROOTNODE:
-            case MegaApi::SEARCH_TARGET_INSHARE:
-            case MegaApi::SEARCH_TARGET_OUTSHARE:
-            case MegaApi::SEARCH_TARGET_PUBLICLINK:
-                searchResults =
-                    searchInNodeManagerByPage(filter, order, cancelToken, maxElements, cursor);
+            case MegaApi::ORDER_SIZE_ASC:
+            case MegaApi::ORDER_SIZE_DESC:
+                cursorCompatible = megaCursor->mLastSize.has_value();
+                break;
+            case MegaApi::ORDER_MODIFICATION_ASC:
+            case MegaApi::ORDER_MODIFICATION_DESC:
+                cursorCompatible = megaCursor->mLastMtime.has_value();
+                break;
+            case MegaApi::ORDER_LABEL_ASC:
+            case MegaApi::ORDER_LABEL_DESC:
+                cursorCompatible = megaCursor->mLastLabel.has_value();
+                break;
+            case MegaApi::ORDER_FAV_ASC:
+            case MegaApi::ORDER_FAV_DESC:
+                cursorCompatible = megaCursor->mLastFav.has_value();
                 break;
             default:
-                LOG_err << "searchByPage not implemented for Location " << filter->byLocation();
+                break;
         }
-    }
+        if (!cursorCompatible)
+        {
+            LOG_err << "listAllNodesByPage: cursor is incompatible with order " << order
+                    << "; the required field for this sort order is not set in the cursor.";
+            return new MegaNodeListPrivate();
+        }
 
-    return new MegaNodeListPrivate(searchResults);
-}
-
-sharedNode_vector MegaApiImpl::searchInNodeManagerByPage(const MegaSearchFilter* filter,
-                                                         int order,
-                                                         CancelToken cancelToken,
-                                                         size_t maxElements,
-                                                         const MegaSearchCursorOffset* megaCursor)
-{
-    int shareType =
-        filter->byLocation() == MegaApi::SEARCH_TARGET_INSHARE ?
-            IN_SHARES :
-            (filter->byLocation() == MegaApi::SEARCH_TARGET_OUTSHARE ?
-                 static_cast<ShareType_t>(OUT_SHARES | PENDING_OUTSHARES) :
-                 (filter->byLocation() == MegaApi::SEARCH_TARGET_PUBLICLINK ? LINK : NO_SHARES));
-
-    NodeSearchFilter nf = searchToNodeFilter(*filter, static_cast<ShareType_t>(shareType));
-
-    if (filter->byLocation() == MegaApi::SEARCH_TARGET_ROOTNODE)
-    {
-        nf.byAncestors({client->mNodeManager.getRootNodeFiles().as8byte(),
-                        client->mNodeManager.getRootNodeVault().as8byte(),
-                        UNDEF});
-    }
-    else if (filter->byLocation() == MegaApi::SEARCH_TARGET_ALL &&
-             filter->byLocationHandle() == INVALID_HANDLE)
-    {
-        nf.byAncestors({client->mNodeManager.getRootNodeFiles().as8byte(),
-                        client->mNodeManager.getRootNodeVault().as8byte(),
-                        client->mNodeManager.getRootNodeRubbish().as8byte()});
-        nf.setIncludedShares(IN_SHARES);
-    }
-
-    std::optional<NodeSearchCursorOffset> cursor;
-    if (megaCursor)
-    {
         NodeSearchCursorOffset c;
         c.mLastName = megaCursor->mLastName;
-        c.mLastType = megaCursor->mLastType;
-        c.mLastHandle = static_cast<handle>(megaCursor->mLastHandle);
-        c.mLastSize = megaCursor->mLastSize;
-        c.mLastMtime = megaCursor->mLastMtime;
-        c.mLastLabel = megaCursor->mLastLabel;
-        c.mLastFav = megaCursor->mLastFav;
-        cursor = std::move(c);
-    }
-
-    return client->mNodeManager.searchNodesByPage(nf, order, cancelToken, maxElements, cursor);
-}
-
-MegaNodeList* MegaApiImpl::listAllNodesByPage(int order,
-                                              CancelToken cancelToken,
-                                              size_t maxElements,
-                                              const MegaSearchCursorOffset* megaCursor,
-                                              int mimeType)
-{
-    std::optional<NodeSearchCursorOffset> cursor;
-    if (megaCursor)
-    {
-        NodeSearchCursorOffset c;
-        c.mLastName = megaCursor->mLastName;
-        c.mLastType = megaCursor->mLastType;
         c.mLastHandle = static_cast<handle>(megaCursor->mLastHandle);
         c.mLastSize = megaCursor->mLastSize;
         c.mLastMtime = megaCursor->mLastMtime;
@@ -13408,11 +13357,11 @@ MegaNodeList* MegaApiImpl::listAllNodesByPage(int order,
     const auto internalMimeType = static_cast<MimeType_t>(mimeType);
 
     SdkMutexGuard g(sdkMutex);
-    sharedNode_vector results = client->mNodeManager.listAllNodesByPage(order,
+    sharedNode_vector results = client->mNodeManager.listAllNodesByPage(internalMimeType,
+                                                                        order,
                                                                         cancelToken,
                                                                         maxElements,
-                                                                        cursor,
-                                                                        internalMimeType);
+                                                                        cursor);
     return new MegaNodeListPrivate(results);
 }
 

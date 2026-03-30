@@ -104,34 +104,12 @@ public:
         //throw NotImplemented(__func__);
     }
 
-    bool searchNodesByPage(const mega::NodeSearchFilter&,
-                           int,
-                           std::vector<std::pair<mega::NodeHandle, mega::NodeSerialized>>&,
-                           mega::CancelToken,
-                           size_t,
-                           const std::optional<mega::NodeSearchCursorOffset>&) override
-    {
-        return false;
-    }
-
-    bool searchNodesByPageWithSnapshot(
-        const mega::NodeSearchFilter&,
-        int,
-        std::vector<std::pair<mega::NodeHandle, mega::NodeSerialized>>&,
-        mega::CancelToken,
-        size_t,
-        size_t,
-        std::string&) override
-    {
-        return false;
-    }
-
-    bool listAllNodesByPage(int,
+    bool listAllNodesByPage(mega::MimeType_t,
+                            int,
                             std::vector<std::pair<mega::NodeHandle, mega::NodeSerialized>>&,
                             mega::CancelToken,
                             size_t,
-                            const std::optional<mega::NodeSearchCursorOffset>&,
-                            mega::MimeType_t) override
+                            const std::optional<mega::NodeSearchCursorOffset>&) override
     {
         return false;
     }
