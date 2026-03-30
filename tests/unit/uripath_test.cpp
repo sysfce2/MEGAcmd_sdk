@@ -53,12 +53,6 @@ public:
         return std::nullopt;
     }
 
-    std::optional<string_type> getParentURI(const string_type&) override
-    {
-        assert(false);
-        return std::nullopt;
-    }
-
     std::optional<string_type> getPath(const string_type&) override
     {
         assert(false);

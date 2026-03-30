@@ -658,6 +658,14 @@ FileSystemType FileSystemAccess::getlocalfstype(const LocalPath& path) const
         return type;
     }
 
+#ifdef __ANDROID__
+    // On Android, parentPath() is invalid for a URI base path with no appended leaves
+    if (path.isURI() && path.isRootPath())
+    {
+        return FS_UNKNOWN;
+    }
+#endif
+
     // Try and get the type based on our parent's path.
     LocalPath parentPath(path);
 

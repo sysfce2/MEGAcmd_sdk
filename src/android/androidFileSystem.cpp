@@ -786,19 +786,6 @@ std::optional<std::string> AndroidPlatformURIHelper::getName(const std::string& 
     return std::nullopt;
 }
 
-std::optional<std::string> AndroidPlatformURIHelper::getParentURI(const std::string& uri)
-{
-    auto androidFileWrapper{AndroidFileWrapper::getAndroidFileWrapper(uri)};
-
-    if (androidFileWrapper->exists())
-    {
-        std::shared_ptr<AndroidFileWrapper> parentWrapper{androidFileWrapper->getParent()};
-        return parentWrapper ? std::optional<std::string>{parentWrapper->getURI()} : std::nullopt;
-    }
-
-    return std::nullopt;
-}
-
 std::optional<std::string> AndroidPlatformURIHelper::getPath(const std::string& uri)
 {
     auto androidFileWrapper{AndroidFileWrapper::getAndroidFileWrapper(uri)};
