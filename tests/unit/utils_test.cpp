@@ -30,7 +30,28 @@
 #include <mega/utils.h>
 
 #include <algorithm>
+#include <array>
 #include <vector>
+
+namespace
+{
+constexpr bool expectedTrailingDotEscapeFor(mega::FileSystemType fsType)
+{
+#if defined(_WIN32) || defined(__ANDROID__)
+    static_cast<void>(fsType);
+    return true;
+#else
+    switch (fsType)
+    {
+        case mega::FS_FAT32:
+        case mega::FS_EXFAT:
+            return true;
+        default:
+            return false;
+    }
+#endif
+}
+} // anonymous namespace
 
 TEST(utils, readLines)
 {
@@ -138,16 +159,6 @@ TEST(Filesystem, EscapesTrailingDots)
     using mega::FileSystemType; // resolve ambiguity with Windows SDK's FileSystemType
 
     FSACCESS_CLASS fsAccess;
-    const std::initializer_list<FileSystemType> fsTypes = {FS_UNKNOWN,
-                                                           FS_EXT,
-                                                           FS_F2FS,
-                                                           FS_XFS,
-                                                           FS_APFS,
-                                                           FS_HFS,
-                                                           FS_FAT32,
-                                                           FS_EXFAT,
-                                                           FS_NTFS,
-                                                           FS_SDCARDFS};
     const auto assertEscapedName =
         [&fsAccess](const char* input, const char* expected, FileSystemType fsType)
     {
@@ -155,14 +166,11 @@ TEST(Filesystem, EscapesTrailingDots)
         fsAccess.escapefsincompatible(&name, fsType);
         ASSERT_EQ(name, expected) << "fsType=" << fsType;
     };
-    const auto escapesTrailingDots = [&fsAccess](FileSystemType fsType)
-    {
-        return fsAccess.needsTrailingDotEscape(fsType);
-    };
 
-    for (const auto fsType: fsTypes)
+    for (FileSystemType fsType = FS_UNKNOWN; fsType <= FS_LAST;
+         fsType = static_cast<FileSystemType>(static_cast<int>(fsType) + 1))
     {
-        const bool trailingDotsEscaped = escapesTrailingDots(fsType);
+        const bool trailingDotsEscaped = expectedTrailingDotEscapeFor(fsType);
 
         assertEscapedName("file.", trailingDotsEscaped ? "file%2e" : "file.", fsType);
         assertEscapedName("file...", trailingDotsEscaped ? "file%2e%2e%2e" : "file...", fsType);
@@ -172,12 +180,14 @@ TEST(Filesystem, EscapesTrailingDots)
         // Whole-name "." and ".." are still escaped (platform-independent behavior).
         assertEscapedName(".", "%2e", fsType);
         assertEscapedName("..", "%2e%2e", fsType);
+        assertEscapedName("...", trailingDotsEscaped ? "%2e%2e%2e" : "...", fsType);
     }
 }
 
 TEST(Filesystem, TrailingDotsRoundTrip)
 {
     using namespace mega;
+    using mega::FileSystemType;
 
     FSACCESS_CLASS fsAccess;
 
@@ -189,12 +199,17 @@ TEST(Filesystem, TrailingDotsRoundTrip)
         "file.txt", // unchanged — no trailing dot
     };
 
-    for (const auto& original: cloudNames)
+    for (FileSystemType fsType = FS_UNKNOWN; fsType <= FS_LAST;
+         fsType = static_cast<FileSystemType>(static_cast<int>(fsType) + 1))
     {
-        string name = original;
-        fsAccess.escapefsincompatible(&name, FS_UNKNOWN);
-        fsAccess.unescapefsincompatible(&name);
-        ASSERT_EQ(name, original) << "Round-trip failed for: " << original;
+        for (const auto& original: cloudNames)
+        {
+            string name = original;
+            fsAccess.escapefsincompatible(&name, fsType);
+            fsAccess.unescapefsincompatible(&name);
+            ASSERT_EQ(name, original)
+                << "Round-trip failed for: " << original << ", fsType=" << fsType;
+        }
     }
 }
 

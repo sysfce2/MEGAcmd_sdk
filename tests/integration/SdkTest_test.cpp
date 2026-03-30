@@ -12308,42 +12308,6 @@ TEST_F(SdkTest, UnescapesReservedCharactersOnUpload)
     ASSERT_STREQ(child->getName(), "a/b/c!.txt");
 }
 
-TEST_F(SdkTest, EscapesTrailingDots)
-{
-    // Set up necessary accounts.
-    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
-
-    MegaApi* api = megaApi[0].get();
-    ASSERT_NE(api, nullptr);
-
-    auto check =
-        [api](const string& input, const string& expectedEscaped, const char* path = nullptr)
-    {
-        unique_ptr<char[]> escaped(api->escapeFsIncompatible(input.c_str(), path));
-        ASSERT_NE(escaped.get(), nullptr);
-        ASSERT_STREQ(expectedEscaped.c_str(), escaped.get());
-
-        unique_ptr<char[]> roundTripped(api->unescapeFsIncompatible(escaped.get(), nullptr));
-        ASSERT_NE(roundTripped.get(), nullptr);
-        ASSERT_STREQ(input.c_str(), roundTripped.get());
-    };
-
-    // "." and ".." are always escaped regardless of platform.
-    check(".", "%2e");
-    check("..", "%2e%2e");
-
-    const auto curPath = fs::current_path().string();
-    const auto fsType = fileSystemAccess->getlocalfstype(LocalPath::fromAbsolutePath(curPath));
-    LOG_info << "fsType: " << fileSystemAccess->fstypetostring(fsType);
-    const bool escapesTrailingDots = fileSystemAccess->needsTrailingDotEscape(fsType);
-    const char* const trailingDotPath = escapesTrailingDots ? curPath.c_str() : nullptr;
-
-    check("trailing.", escapesTrailingDots ? "trailing%2e" : "trailing.", trailingDotPath);
-    check("trailing..", escapesTrailingDots ? "trailing%2e%2e" : "trailing..", trailingDotPath);
-    check("mid.dle.", escapesTrailingDots ? "mid.dle%2e" : "mid.dle.", trailingDotPath);
-    check("...", escapesTrailingDots ? "%2e%2e%2e" : "...", trailingDotPath);
-}
-
 TEST_F(SdkTest, SdkTestStartUploadTrailingDotName)
 {
     LOG_info << "___TEST StartUpload trailing dot name___";

@@ -714,20 +714,17 @@ bool FileSystemAccess::islocalfscompatible(const int character, const FileSystem
 
 void FileSystemAccess::escapeTrailingDots(string& name)
 {
-    size_t pos = name.size();
-    while (pos > 0 && name[pos - 1] == '.')
-    {
-        --pos;
-    }
+    const size_t lastNonDot = name.find_last_not_of('.');
+    const size_t trailingDots =
+        lastNonDot == string::npos ? name.size() : name.size() - lastNonDot - 1;
 
-    const size_t trailingDots = name.size() - pos;
     if (trailingDots == 0)
     {
         return;
     }
 
     name.reserve(name.size() + trailingDots * 2);
-    name.erase(pos);
+    name.erase(name.size() - trailingDots);
     for (size_t j = 0; j < trailingDots; ++j)
     {
         name.append("%2e");
