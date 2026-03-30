@@ -1740,8 +1740,7 @@ protected:
         std::mt19937 gen(rd());
         std::uniform_int_distribution<int> dist(0, 5);
         auto delayMs = dist(gen);
-        LOG_info << logPre << "Network failure thread: delaying " << delayMs
-                 << "ms before injecting failure...";
+        LOG_info << logPre << "Delaying " << delayMs << "ms before injecting failure...";
         std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
     }
 
@@ -1980,6 +1979,122 @@ protected:
         globalMegaTestHooks.interceptSCRequest = origInterceptSCRequest;
         client->megaTestHooks.interceptSCChunk = nullptr;
 #endif
+    }
+
+    /**
+     * @brief Execute catchup test
+     */
+    void catchupTest(const std::string& logPre, unsigned int apiIndex)
+    {
+        std::promise<void> actionPacketStart;
+        std::future<void> actionPacketStartFuture = actionPacketStart.get_future();
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+        auto origInterceptSCRequest = globalMegaTestHooks.interceptSCRequest;
+        globalMegaTestHooks.interceptSCRequest =
+            [&actionPacketStart, &origInterceptSCRequest](std::unique_ptr<HttpReq>& pendingsc)
+        {
+            if (origInterceptSCRequest)
+            {
+                origInterceptSCRequest(pendingsc);
+            }
+
+            if (*pendingsc->in.c_str() == '{')
+            {
+                // Signal the catchup thread on the first SC response with AP data
+                actionPacketStart.set_value();
+
+                // Restore the hook
+                globalMegaTestHooks.interceptSCRequest = origInterceptSCRequest;
+            }
+        };
+#endif
+
+        // Launch a background thread that waits until an action packet is being processed,
+        // then triggers a catchup.
+        std::thread catchupThread(
+            [&, this]()
+            {
+                LOG_info << logPre << "Catchup thread: waiting for action packets start...";
+                actionPacketStartFuture.wait();
+
+                randomDelay(logPre);
+
+                LOG_info << logPre << "Triggering catchup on " << apiIndex
+                         << " during AP processing";
+                RequestTracker rt(megaApi[apiIndex].get());
+                megaApi[apiIndex]->catchup(&rt);
+                auto err = rt.waitForResult(AP_WAIT_TIMEOUT_SECONDS);
+                LOG_info << logPre << "Catchup on " << apiIndex
+                         << " completed with result: " << err;
+            });
+
+        // Clear previous EVENT_NODES_CURRENT before triggering SC channel,
+        // so we can detect when action packets are fully up to date after recovery.
+        mApi[apiIndex].resetlastEvent();
+
+        LOG_info << logPre << "Resuming receiver client...";
+        resumeClient(apiIndex);
+
+        catchupThread.join();
+
+        LOG_info << logPre << "Waiting for Client " << apiIndex
+                 << " action packets to be up to date...";
+        ASSERT_TRUE(WaitFor(
+            [&, this]()
+            {
+                return mApi[apiIndex].lastEventsContain(MegaEvent::EVENT_NODES_CURRENT);
+            },
+            AP_WAIT_TIMEOUT_SECONDS * 1000))
+            << "Timeout expired waiting for Client " << apiIndex
+            << " action packets to be up to date";
+        LOG_info << logPre << "Client " << apiIndex << " action packets are up to date";
+    }
+
+    /**
+     * @brief Execute incompleted packet test
+     */
+    void incompletedPacketTest(MegaClient* client, const std::string& logPre, unsigned int apiIndex)
+    {
+        // Install hook to remove the second half of the first SC response with AP data,
+        // making the JSON incomplete while pendingsc status remains REQ_SUCCESS.
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+        client->megaTestHooks.interceptSCChunk = [client](std::unique_ptr<HttpReq>& pendingsc)
+        {
+            if (pendingsc->status == REQ_SUCCESS && !pendingsc->in.empty())
+            {
+                // Remove the second half of the response to make the JSON incomplete
+                // while keeping the status as REQ_SUCCESS. This simulates a scenario
+                // where the HTTP response is marked as successful but the payload is
+                // cut short.
+                const size_t halfSize = pendingsc->in.size() / 2;
+                LOG_info << "Incompleted packet interceptor: removing second half from SC "
+                            "response ("
+                         << pendingsc->in.size() << " -> " << halfSize << " bytes)";
+                pendingsc->in.resize(halfSize);
+                // Clear the hook after firing once
+                client->megaTestHooks.interceptSCChunk = nullptr;
+            }
+        };
+#endif
+
+        // Clear previous EVENT_NODES_CURRENT before triggering SC channel
+        mApi[apiIndex].resetlastEvent();
+
+        LOG_info << logPre << "Resuming receiver client...";
+        resumeClient(apiIndex);
+
+        LOG_info << logPre << "Waiting for Client " << apiIndex
+                 << " action packets to be up to date...";
+        ASSERT_TRUE(WaitFor(
+            [&, this]()
+            {
+                return mApi[apiIndex].lastEventsContain(MegaEvent::EVENT_NODES_CURRENT);
+            },
+            AP_WAIT_TIMEOUT_SECONDS * 1000))
+            << "Timeout expired waiting for Client " << apiIndex
+            << " action packets to be up to date";
+        LOG_info << logPre << "Client " << apiIndex << " action packets are up to date";
     }
 
     /**
@@ -2337,6 +2452,84 @@ TEST_F(SdkTestMassiveActionPackets, MassiveActionPacketsProcessingWithNetworkFai
         networkFailureTest(megaApi[RECEIVER1_INDEX]->getClient(), logPre, RECEIVER1_INDEX));
 
     ASSERT_NO_FATAL_FAILURE(verifyClientsConsistency(logPre, {RECEIVER1_INDEX}));
+
+    sdk_test::resetScParserMode();
+
+    CASE_info << "finished";
+}
+
+/**
+ * @brief Test: Massive Action Packets Processing and Catchup
+ *
+ * This test generates massive action packets through node copy operations,
+ * then triggers a catchup while the streaming receiver is processing APs.
+ * The SDK should handle the concurrent catchup correctly and end up with
+ * a consistent state.
+ */
+TEST_F(SdkTestMassiveActionPackets, MassiveActionPacketsProcessingAndCatchup)
+{
+    CASE_info << "started";
+
+    const std::string logPre = getLogPrefix();
+
+    // Run in action packet streaming parsing mode
+    sdk_test::setScParserMode(true);
+
+    // Verify all clients are logged in
+    ASSERT_NO_FATAL_FAILURE(verifyClientsLogin(logPre, {EXECUTOR_INDEX, RECEIVER1_INDEX}));
+
+    // Create test root folder before pausing receiver
+    ASSERT_NO_FATAL_FAILURE(createTestRootFolder());
+
+    // Pause receiver client to accumulate action packets
+    ASSERT_NO_FATAL_FAILURE(pauseClient(RECEIVER1_INDEX));
+
+    // Generate action packets
+    ASSERT_NO_FATAL_FAILURE(copyMassiveTestFiles(logPre, mTestRootHandle));
+
+    ASSERT_NO_FATAL_FAILURE(catchupTest(logPre, RECEIVER1_INDEX));
+
+    ASSERT_NO_FATAL_FAILURE(verifyClientsConsistency(logPre, {RECEIVER1_INDEX}));
+
+    sdk_test::resetScParserMode();
+
+    CASE_info << "finished";
+}
+
+/**
+ * @brief Test: Massive Action Packets Processing with Incompleted Packet
+ *
+ * This test generates massive action packets through node copy operations,
+ * then simulates receiving an incomplete JSON packet while the HTTP status
+ * indicates success (REQ_SUCCESS). The SDK should detect the malformed
+ * JSON and log, as incomplete action packets with successful HTTP status
+ * indicate a data integrity issue that must not be silently ignored.
+ */
+TEST_F(SdkTestMassiveActionPackets, MassiveActionPacketsProcessingWithIncompletedPacket)
+{
+    CASE_info << "started";
+
+    const std::string logPre = getLogPrefix();
+
+    // Run in action packet streaming parsing mode
+    sdk_test::setScParserMode(true);
+
+    // Verify all clients are logged in
+    ASSERT_NO_FATAL_FAILURE(verifyClientsLogin(logPre, {EXECUTOR_INDEX, RECEIVER1_INDEX}));
+
+    // Create test root folder before pausing receiver
+    ASSERT_NO_FATAL_FAILURE(createTestRootFolder());
+
+    // Pause receiver client to accumulate action packets
+    ASSERT_NO_FATAL_FAILURE(pauseClient(RECEIVER1_INDEX));
+
+    // Generate action packets
+    ASSERT_NO_FATAL_FAILURE(copyMassiveTestFiles(logPre, mTestRootHandle));
+
+    // Resume client and inject incompleted packet during AP processing.
+    // The SDK should assert when it detects the incomplete JSON.
+    ASSERT_NO_FATAL_FAILURE(
+        incompletedPacketTest(megaApi[RECEIVER1_INDEX]->getClient(), logPre, RECEIVER1_INDEX));
 
     sdk_test::resetScParserMode();
 

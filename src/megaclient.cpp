@@ -25081,7 +25081,7 @@ void MegaClient::chooseScParsingMode()
     }
 #endif
 
-    if (*pendingsc->in.c_str() == '{' && pendingsc->contentlength > 7)
+    if (*pendingsc->in.c_str() == '{' && pendingsc->in.size() > 7)
     {
         std::string_view str = pendingsc->in;
         if (str.compare(2, 3, "apm") == 0 && str[7] == '1')
@@ -25435,8 +25435,7 @@ void MegaClient::processScMessageInStreaming()
                 {
                     // This means we received the last part of whole JSON(action packets)
                     // But JSONSplitter did not end the process properly
-                    // So, to prevent any data inconsistancy, assert here
-                    assert(false);
+                    LOG_warn << "Incompleted SC response detected";
                 }
 
                 clearStreamingParser();

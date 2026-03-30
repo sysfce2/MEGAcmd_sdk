@@ -67,7 +67,7 @@ void ScStreamingParser::init()
                      {
                          mClient.sc_updateStats();
 
-                         mActionName = json->getnameidvalue();
+                         mActionName = json->getnameid(json->pos + 1);
 
                          if (mActionName == makeNameid("t"))
                          {
