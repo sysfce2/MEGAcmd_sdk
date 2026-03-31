@@ -25264,14 +25264,13 @@ void MegaClient::handleScNonStreaming()
                     app->notify_network_activity(NetworkActivityChannel::SC,
                                                  NetworkActivityType::REQUEST_RECEIVED,
                                                  API_OK);
-                    break;
                 }
                 else
                 {
                     handleScErrorInSuccessState();
                 }
+                break;
 
-                [[fallthrough]];
             case REQ_FAILURE:
                 handleScInFailureState();
                 break;
@@ -25320,21 +25319,16 @@ bool MegaClient::handleScKeepAliveInSuccessState()
 
 void MegaClient::handleScErrorInSuccessState()
 {
+    int networkActivityType = NetworkActivityType::REQUEST_RECEIVED;
     error e = (error)atoi(pendingsc->in.c_str());
     if ((e == API_ESID) || (e == API_ENOENT && loggedIntoFolder()))
     {
         app->request_error(e);
         scsn.stopScsn();
-        app->notify_network_activity(NetworkActivityChannel::SC,
-                                     NetworkActivityType::REQUEST_RECEIVED,
-                                     e);
     }
     else if (e == API_ETOOMANY)
     {
         LOG_warn << "Too many pending updates - reloading local state";
-        app->notify_network_activity(NetworkActivityChannel::SC,
-                                     NetworkActivityType::REQUEST_RECEIVED,
-                                     e);
 
         // Stop the sc channel to prevent the reception of multiple
         // API_ETOOMANY errors causing multiple consecutive reloads
@@ -25360,9 +25354,6 @@ void MegaClient::handleScErrorInSuccessState()
         {
             fnstats.eAgainCount++;
         }
-        app->notify_network_activity(NetworkActivityChannel::SC,
-                                     NetworkActivityType::REQUEST_RECEIVED,
-                                     e);
     }
     else if (e == API_EBLOCKED)
     {
@@ -25372,73 +25363,82 @@ void MegaClient::handleScErrorInSuccessState()
     else
     {
         LOG_err << "Unexpected sc response: " << pendingsc->in;
-        app->notify_network_activity(NetworkActivityChannel::SC,
-                                     NetworkActivityType::REQUEST_ERROR,
-                                     e);
+        networkActivityType = NetworkActivityType::REQUEST_ERROR;
         scsn.stopScsn();
     }
+
+    app->notify_network_activity(NetworkActivityChannel::SC, networkActivityType, e);
+
+    clearForScError();
+
     return;
 }
 
 void MegaClient::handleScInFailureState()
 {
-    pendingscTimedOut = false;
-    if (pendingsc)
+    if (!statecurrent && pendingsc->httpstatus != 200)
     {
-        if (!statecurrent && pendingsc->httpstatus != 200)
+        if (pendingsc->httpstatus == 500)
         {
-            if (pendingsc->httpstatus == 500)
-            {
-                fnstats.e500Count++;
-            }
-            else
-            {
-                fnstats.eOthersCount++;
-            }
+            fnstats.e500Count++;
         }
-
-        if (pendingsc->httpstatus == 500 && !scnotifyurl.empty())
+        else
         {
-            sendevent(99482, "500 received on wsc url");
-            LOG_err << "500 error on wsc URL";
+            fnstats.eOthersCount++;
         }
-        if (pendingsc->sslcheckfailed)
-        {
-            sendevent(99453, "Invalid public key");
-            sslfakeissuer = pendingsc->sslfakeissuer;
-            app->request_error(API_ESSL);
-            sslfakeissuer.clear();
-
-            if (!retryessl)
-            {
-                scsn.stopScsn();
-            }
-        }
-
-        if (!scsn.stopped())
-        {
-            if (pendingsc->mDnsFailure)
-            {
-                app->notify_network_activity(NetworkActivityChannel::SC,
-                                             NetworkActivityType ::REQUEST_SENT,
-                                             LOCAL_ENETWORK);
-            }
-            else
-            {
-                app->notify_network_activity(NetworkActivityChannel::SC,
-                                             NetworkActivityType ::REQUEST_RECEIVED,
-                                             pendingsc->httpstatus);
-            }
-        }
-
-        pendingsc.reset();
     }
+
+    if (pendingsc->httpstatus == 500 && !scnotifyurl.empty())
+    {
+        sendevent(99482, "500 received on wsc url");
+        LOG_err << "500 error on wsc URL";
+    }
+
+    if (pendingsc->sslcheckfailed)
+    {
+        sendevent(99453, "Invalid public key");
+        sslfakeissuer = pendingsc->sslfakeissuer;
+        app->request_error(API_ESSL);
+        sslfakeissuer.clear();
+
+        if (!retryessl)
+        {
+            scsn.stopScsn();
+            app->notify_network_activity(NetworkActivityChannel::SC,
+                                         NetworkActivityType::REQUEST_ERROR,
+                                         API_ESSL);
+        }
+    }
+
+    if (!scsn.stopped())
+    {
+        if (pendingsc->mDnsFailure)
+        {
+            app->notify_network_activity(NetworkActivityChannel::SC,
+                                         NetworkActivityType ::REQUEST_SENT,
+                                         LOCAL_ENETWORK);
+        }
+        else
+        {
+            app->notify_network_activity(NetworkActivityChannel::SC,
+                                         NetworkActivityType ::REQUEST_RECEIVED,
+                                         pendingsc->httpstatus);
+        }
+    }
+
+    clearForScError();
+
+    return;
+}
+
+void MegaClient::clearForScError()
+{
+    pendingscTimedOut = false;
+
+    pendingsc.reset();
 
     if (scsn.stopped())
     {
-        app->notify_network_activity(NetworkActivityChannel::SC,
-                                     NetworkActivityType::REQUEST_ERROR,
-                                     API_ESSL);
         btsc.backoff(NEVER);
     }
     else
@@ -25492,7 +25492,6 @@ void MegaClient::handleScInStreaming()
                 // 1. received one complete JSON message
                 // 2. recevied the last chunk of the JSON message
                 setStreamingContinue();
-                break;
             }
             else
             {
@@ -25501,8 +25500,8 @@ void MegaClient::handleScInStreaming()
                 clearStreamingParser();
                 handleScErrorInSuccessState();
             }
+            break;
 
-            [[fallthrough]];
         case REQ_FAILURE:
             // Clear the streaming parser before handling the failure, because clearing
             // may commit to the DB, which must happen before scsn is stopped.
