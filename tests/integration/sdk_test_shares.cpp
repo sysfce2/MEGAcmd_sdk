@@ -717,7 +717,7 @@ TEST_F(SdkTestShares, SdkTestShares)
 
     transferError =
         doStartDownload(1,
-                        megaApi[0]->authorizeNode(nNoAuth.get()),
+                        std::unique_ptr<MegaNode>{megaApi[0]->authorizeNode(nNoAuth.get())}.get(),
                         "authorized_node",
                         nullptr /*customName*/,
                         nullptr /*appData*/,
