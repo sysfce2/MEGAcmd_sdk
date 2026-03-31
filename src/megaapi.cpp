@@ -3822,11 +3822,11 @@ void MegaApi::startUpload(const std::string& localPath,
                        listener);
 }
 
-void MegaApi::startUpload(const std::string& localPath,
-                          MegaHandle parentHandle,
-                          MegaCancelToken* cancelToken,
-                          const MegaUploadOptions* options,
-                          MegaTransferListener* listener)
+void MegaApi::startUploadByHandle(const std::string& localPath,
+                                  MegaHandle parentHandle,
+                                  MegaCancelToken* cancelToken,
+                                  const MegaUploadOptions* options,
+                                  MegaTransferListener* listener)
 {
     MegaApiImpl::MegaUploadOptionsPrivate localOptionsPrivate;
     if (options)

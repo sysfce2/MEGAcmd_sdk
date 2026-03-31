@@ -2647,11 +2647,11 @@ using namespace mega;
                         delegate:(id<MEGATransferDelegate>)delegate {
     if (self.megaApi) {
         auto cppOptions = [self generateUploadOptionsFrom:options];
-        self.megaApi->startUpload(localPath.UTF8String,
-                                  parentHandle,
-                                  cancelToken.getCPtr,
-                                  &cppOptions,
-                                  [self createDelegateMEGATransferListener:delegate singleListener:YES]);
+        self.megaApi->startUploadByHandle(localPath.UTF8String,
+                                          parentHandle,
+                                          cancelToken.getCPtr,
+                                          &cppOptions,
+                                          [self createDelegateMEGATransferListener:delegate singleListener:YES]);
     }
 }
 
@@ -2661,10 +2661,10 @@ using namespace mega;
                          options:(MEGAUploadOptions *)options {
     if (self.megaApi) {
         auto cppOptions = [self generateUploadOptionsFrom:options];
-        self.megaApi->startUpload(localPath.UTF8String,
-                                  parentHandle,
-                                  cancelToken.getCPtr,
-                                  &cppOptions);
+        self.megaApi->startUploadByHandle(localPath.UTF8String,
+                                          parentHandle,
+                                          cancelToken.getCPtr,
+                                          &cppOptions);
     }
 }
 
