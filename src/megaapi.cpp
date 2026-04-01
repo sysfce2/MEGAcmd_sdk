@@ -7481,6 +7481,62 @@ size_t MegaSearchPage::size() const
     return 0u;
 }
 
+MegaSearchCursorOffset::MegaSearchCursorOffset() {}
+
+MegaSearchCursorOffset* MegaSearchCursorOffset::createInstance()
+{
+    return new MegaSearchCursorOffsetPrivate();
+}
+
+MegaSearchCursorOffset* MegaSearchCursorOffset::copy() const
+{
+    return nullptr;
+}
+
+MegaSearchCursorOffset::~MegaSearchCursorOffset() {}
+
+void MegaSearchCursorOffset::setLastName(const char* /*lastName*/) {}
+
+void MegaSearchCursorOffset::setLastHandle(MegaHandle /*lastHandle*/) {}
+
+void MegaSearchCursorOffset::setLastSize(int64_t /*lastSize*/) {}
+
+void MegaSearchCursorOffset::setLastMtime(int64_t /*lastMtime*/) {}
+
+void MegaSearchCursorOffset::setLastLabel(int /*lastLabel*/) {}
+
+void MegaSearchCursorOffset::setLastFav(int /*lastFav*/) {}
+
+const char* MegaSearchCursorOffset::getLastName() const
+{
+    return nullptr;
+}
+
+MegaHandle MegaSearchCursorOffset::getLastHandle() const
+{
+    return INVALID_HANDLE;
+}
+
+int64_t MegaSearchCursorOffset::getLastSize() const
+{
+    return -1;
+}
+
+int64_t MegaSearchCursorOffset::getLastMtime() const
+{
+    return -1;
+}
+
+int MegaSearchCursorOffset::getLastLabel() const
+{
+    return -1;
+}
+
+int MegaSearchCursorOffset::getLastFav() const
+{
+    return -1;
+}
+
 MegaApiLock::MegaApiLock(MegaApiImpl* ptr, bool lock) : api(ptr)
 {
     if (lock)

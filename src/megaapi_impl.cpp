@@ -13308,49 +13308,98 @@ MegaNodeList* MegaApiImpl::listAllNodesByPage(int mimeType,
 {
     if (mimeType <= MegaApi::FILE_TYPE_DEFAULT || mimeType > MegaApi::FILE_TYPE_LAST)
     {
-        LOG_err << "listAllNodesByPage: invalid mimeType value " << mimeType;
+        LOG_warn << "listAllNodesByPage: invalid mimeType value " << mimeType;
         return new MegaNodeListPrivate();
+    }
+
+    NodeSearchCursorOffset c;
+    if (megaCursor)
+    {
+        const char* lastName = megaCursor->getLastName();
+        if (!lastName || !*lastName)
+        {
+            LOG_warn << "listAllNodesByPage: cursor has missing or empty last name.";
+            return new MegaNodeListPrivate();
+        }
+        const MegaHandle lastHandle = megaCursor->getLastHandle();
+        if (lastHandle == INVALID_HANDLE)
+        {
+            LOG_warn << "listAllNodesByPage: cursor has invalid last handle.";
+            return new MegaNodeListPrivate();
+        }
+        c.mLastName = lastName;
+        c.mLastHandle = static_cast<handle>(lastHandle);
+    }
+    switch (order)
+    {
+        case MegaApi::ORDER_DEFAULT_ASC:
+        case MegaApi::ORDER_DEFAULT_DESC:
+            break;
+        case MegaApi::ORDER_SIZE_ASC:
+        case MegaApi::ORDER_SIZE_DESC:
+            if (megaCursor)
+            {
+                const int64_t lastSize = megaCursor->getLastSize();
+                if (lastSize < 0)
+                {
+                    LOG_warn << "listAllNodesByPage: cursor has missing or negative last size: "
+                             << lastSize;
+                    return new MegaNodeListPrivate();
+                }
+                c.mLastSize = lastSize;
+            }
+            break;
+        case MegaApi::ORDER_MODIFICATION_ASC:
+        case MegaApi::ORDER_MODIFICATION_DESC:
+            if (megaCursor)
+            {
+                const int64_t lastMtime = megaCursor->getLastMtime();
+                if (lastMtime < 0)
+                {
+                    LOG_warn << "listAllNodesByPage: cursor has missing or invalid last mtime: "
+                             << lastMtime;
+                    return new MegaNodeListPrivate();
+                }
+                c.mLastMtime = lastMtime;
+            }
+            break;
+        case MegaApi::ORDER_LABEL_ASC:
+        case MegaApi::ORDER_LABEL_DESC:
+            if (megaCursor)
+            {
+                const int lastLabel = megaCursor->getLastLabel();
+                if (lastLabel < MegaNode::NODE_LBL_UNKNOWN || lastLabel > MegaNode::NODE_LBL_GREY)
+                {
+                    LOG_warn
+                        << "listAllNodesByPage: cursor has missing or out-of-range last label: "
+                        << lastLabel;
+                    return new MegaNodeListPrivate();
+                }
+                c.mLastLabel = lastLabel;
+            }
+            break;
+        case MegaApi::ORDER_FAV_ASC:
+        case MegaApi::ORDER_FAV_DESC:
+            if (megaCursor)
+            {
+                const int lastFav = megaCursor->getLastFav();
+                if (lastFav != 0 && lastFav != 1)
+                {
+                    LOG_warn << "listAllNodesByPage: cursor has missing or invalid last fav value: "
+                             << lastFav;
+                    return new MegaNodeListPrivate();
+                }
+                c.mLastFav = lastFav;
+            }
+            break;
+        default:
+            LOG_warn << "listAllNodesByPage: unsupported order value: " << order;
+            return new MegaNodeListPrivate();
     }
 
     std::optional<NodeSearchCursorOffset> cursor;
     if (megaCursor)
     {
-        bool cursorCompatible = true;
-        switch (order)
-        {
-            case MegaApi::ORDER_SIZE_ASC:
-            case MegaApi::ORDER_SIZE_DESC:
-                cursorCompatible = megaCursor->mLastSize.has_value();
-                break;
-            case MegaApi::ORDER_MODIFICATION_ASC:
-            case MegaApi::ORDER_MODIFICATION_DESC:
-                cursorCompatible = megaCursor->mLastMtime.has_value();
-                break;
-            case MegaApi::ORDER_LABEL_ASC:
-            case MegaApi::ORDER_LABEL_DESC:
-                cursorCompatible = megaCursor->mLastLabel.has_value();
-                break;
-            case MegaApi::ORDER_FAV_ASC:
-            case MegaApi::ORDER_FAV_DESC:
-                cursorCompatible = megaCursor->mLastFav.has_value();
-                break;
-            default:
-                break;
-        }
-        if (!cursorCompatible)
-        {
-            LOG_err << "listAllNodesByPage: cursor is incompatible with order " << order
-                    << "; the required field for this sort order is not set in the cursor.";
-            return new MegaNodeListPrivate();
-        }
-
-        NodeSearchCursorOffset c;
-        c.mLastName = megaCursor->mLastName;
-        c.mLastHandle = static_cast<handle>(megaCursor->mLastHandle);
-        c.mLastSize = megaCursor->mLastSize;
-        c.mLastMtime = megaCursor->mLastMtime;
-        c.mLastLabel = megaCursor->mLastLabel;
-        c.mLastFav = megaCursor->mLastFav;
         cursor = std::move(c);
     }
 
