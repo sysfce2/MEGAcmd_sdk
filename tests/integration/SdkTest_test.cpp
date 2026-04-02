@@ -21824,8 +21824,18 @@ TEST_F(SdkTest, SdkDeleteUserAttribute)
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
 
     string firstname = "testingName";
+    string lastname = "lastname";
+    /*
+    1) If at least one of firstname/lastname exists and is not null, then return -9.
+    2) If neither exist or one is missing and the other is null, then:
+        a. If fetching lastname, return empty string
+        b. If fetching firstname, attempt to populate from signup data, if still not exists, set to
+empty string
+    */
     ASSERT_EQ(API_OK,
               synchronousSetUserAttribute(0, MegaApi::USER_ATTR_FIRSTNAME, firstname.c_str()));
+    ASSERT_EQ(API_OK,
+              synchronousSetUserAttribute(0, MegaApi::USER_ATTR_LASTNAME, lastname.c_str()));
 
     RequestTracker deleteAttributeTracker(megaApi[0].get());
     megaApi[0]->deleteUserAttribute(MegaApi::USER_ATTR_FIRSTNAME, &deleteAttributeTracker);
