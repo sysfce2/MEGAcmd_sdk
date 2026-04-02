@@ -8093,8 +8093,9 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
 /// - [MEGARequest recentActionsBuckets] - Returns an array with 1 bucket
 ///
 /// @param bucketId Bucket identifier returned by MEGARecentActionBucket's identifier
+/// @param excludeSensitives Set to true to filter out sensitive nodes
 /// @param delegate MEGARequestDelegate to track this request
-- (void)getRecentActionByBucketId:(NSString *)bucketId delegate:(id<MEGARequestDelegate>)delegate;
+- (void)getRecentActionByBucketId:(NSString *)bucketId excludeSensitives:(BOOL)excludeSensitives delegate:(id<MEGARequestDelegate>)delegate;
 
 /**
  * @brief Process a node tree using a MEGATreeProcessorDelegate implementation

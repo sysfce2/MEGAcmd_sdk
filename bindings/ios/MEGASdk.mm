@@ -4178,9 +4178,9 @@ using namespace mega;
     return password;
 }
 
-- (void)getRecentActionByBucketId:(NSString *)bucketId delegate:(id<MEGARequestDelegate>)delegate {
+- (void)getRecentActionByBucketId:(NSString *)bucketId excludeSensitives:(BOOL)excludeSensitives delegate:(id<MEGARequestDelegate>)delegate {
     if (self.megaApi) {
-        self.megaApi->getRecentActionById(bucketId.UTF8String, [self createDelegateMEGARequestListener:delegate singleListener:YES]);
+        self.megaApi->getRecentActionById(bucketId.UTF8String, excludeSensitives, [self createDelegateMEGARequestListener:delegate singleListener:YES]);
     }
 }
 
