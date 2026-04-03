@@ -104,6 +104,16 @@ public:
         //throw NotImplemented(__func__);
     }
 
+    bool listAllNodesByPage(mega::MimeType_t,
+                            int,
+                            std::vector<std::pair<mega::NodeHandle, mega::NodeSerialized>>&,
+                            mega::CancelToken,
+                            size_t,
+                            const std::optional<mega::NodeSearchCursorOffset>&) override
+    {
+        return false;
+    }
+
     auto getNodeTagsBelow(mega::CancelToken, mega::NodeHandle, const std::string&)
         -> std::optional<std::set<std::string>> override
     {

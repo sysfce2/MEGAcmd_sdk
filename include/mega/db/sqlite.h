@@ -141,6 +141,13 @@ public:
 
     void updateCounter(NodeHandle nodeHandle, const std::string& nodeCounterBlob) override;
     void updateCounterAndFlags(NodeHandle nodeHandle, uint64_t flags, const std::string& nodeCounterBlob) override;
+    bool listAllNodesByPage(MimeType_t mimeType,
+                            int order,
+                            std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes,
+                            CancelToken cancelFlag,
+                            size_t maxElements,
+                            const std::optional<NodeSearchCursorOffset>& cursor) override;
+
     void createIndexes(bool enableIndexesForSearching,
                        bool enableIndexesForLexicographicalList) override;
     void dropSearchDBIndexes() override;
@@ -198,6 +205,7 @@ private:
     sqlite3_stmt* mStmtGetChildrenLexi = nullptr;
     sqlite3_stmt* mStmtGetChildrenLexiNoOffset = nullptr;
     std::map<size_t, sqlite3_stmt*> mStmtSearchNodes;
+    std::map<size_t, sqlite3_stmt*> mStmtListAllNodesByPage;
     sqlite3_stmt* mStmtNodeTagsBelow = nullptr;
     sqlite3_stmt* mStmtNodesByFpNoMtime = nullptr;
     sqlite3_stmt* mStmtNodeByFp = nullptr;

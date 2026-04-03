@@ -802,7 +802,10 @@ sharedNode_vector NodeManager::searchNodes(const NodeSearchFilter& filter, int o
     return searchNodes_internal(filter, order, cancelFlag, page);
 }
 
-sharedNode_vector NodeManager::searchNodes_internal(const NodeSearchFilter& filter, int order, CancelToken cancelFlag, const NodeSearchPage& page)
+sharedNode_vector NodeManager::searchNodes_internal(const NodeSearchFilter& filter,
+                                                    int order,
+                                                    CancelToken cancelFlag,
+                                                    const NodeSearchPage& page)
 {
     assert(mMutex.owns_lock());
 
@@ -838,6 +841,43 @@ sharedNode_vector NodeManager::searchNodes_internal(const NodeSearchFilter& filt
     sharedNode_vector nodes = processUnserializedNodes(nodesFromTable, cancelFlag);
 
     return nodes;
+}
+
+sharedNode_vector
+    NodeManager::listAllNodesByPage(MimeType_t mimeType,
+                                    int order,
+                                    CancelToken cancelFlag,
+                                    size_t maxElements,
+                                    const std::optional<NodeSearchCursorOffset>& cursor)
+{
+    LockGuard g(mMutex);
+    return listAllNodesByPage_internal(mimeType, order, cancelFlag, maxElements, cursor);
+}
+
+sharedNode_vector
+    NodeManager::listAllNodesByPage_internal(MimeType_t mimeType,
+                                             int order,
+                                             CancelToken cancelFlag,
+                                             size_t maxElements,
+                                             const std::optional<NodeSearchCursorOffset>& cursor)
+{
+    assert(mMutex.owns_lock());
+
+    // validation
+    if (!mTable || mNodes.empty())
+    {
+        assert(mTable && !mNodes.empty());
+        return sharedNode_vector();
+    }
+
+    vector<pair<NodeHandle, NodeSerialized>> nodesFromTable;
+    if (!mTable
+             ->listAllNodesByPage(mimeType, order, nodesFromTable, cancelFlag, maxElements, cursor))
+    {
+        return sharedNode_vector();
+    }
+
+    return processUnserializedNodes(nodesFromTable, cancelFlag);
 }
 
 sharedNode_vector NodeManager::getNodesWithInShares()

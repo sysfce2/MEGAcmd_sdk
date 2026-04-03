@@ -57,20 +57,20 @@ struct MegaSearchLexicographicalOffset
 };
 
 #ifdef WIN32
-    const char MEGA_DEBRIS_FOLDER[] = "Rubbish";
+const char MEGA_DEBRIS_FOLDER[] = "Rubbish";
 #else
-    const char MEGA_DEBRIS_FOLDER[] = ".debris";
+const char MEGA_DEBRIS_FOLDER[] = ".debris";
 #endif
 
-    /**
-     * @brief INVALID_HANDLE Invalid value for a handle
-     *
-     * This value is used to represent an invalid handle. Several MEGA objects can have
-     * a handle but it will never be mega::INVALID_HANDLE
-     *
-     */
-    const MegaHandle INVALID_HANDLE = ~(MegaHandle)0;
-    const MegaTimeStamp MEGA_INVALID_TIMESTAMP = 0;
+/**
+ * @brief INVALID_HANDLE Invalid value for a handle
+ *
+ * This value is used to represent an invalid handle. Several MEGA objects can have
+ * a handle but it will never be mega::INVALID_HANDLE
+ *
+ */
+const MegaHandle INVALID_HANDLE = ~(MegaHandle)0;
+const MegaTimeStamp MEGA_INVALID_TIMESTAMP = 0;
 
 class MegaListener;
 class MegaRequestListener;
@@ -10769,6 +10769,136 @@ public:
 };
 
 /**
+ * @brief Cursor position for cursor-based (keyset) pagination in MegaApi::listAllNodesByPage().
+ *
+ * Build this from the last MegaNode returned in the previous page.
+ * The sort-key fields that must be set depend on the sort order:
+ *
+ *   ORDER_DEFAULT_ASC / ORDER_DEFAULT_DESC     : setLastName, setLastHandle
+ *   ORDER_SIZE_ASC    / ORDER_SIZE_DESC        : setLastName, setLastHandle, setLastSize
+ *   ORDER_MODIFICATION_ASC / _DESC             : setLastName, setLastHandle, setLastMtime
+ *   ORDER_LABEL_ASC / ORDER_LABEL_DESC         : setLastName, setLastHandle, setLastLabel
+ *   ORDER_FAV_ASC   / ORDER_FAV_DESC           : setLastName, setLastHandle, setLastFav
+ *
+ * Note on ORDER_FAV_ASC / ORDER_FAV_DESC naming:
+ *   Despite the "ASC" / "DESC" suffix, both orders sort non-favourites and
+ *   favourites into distinct groups rather than a simple numeric ascending /
+ *   descending sequence:
+ *     ORDER_FAV_ASC  – favourites appear FIRST, then non-favourites
+ *                      (SQL: ORDER BY fav DESC, name ASC)
+ *     ORDER_FAV_DESC – non-favourites appear FIRST, then favourites
+ *                      (SQL: ORDER BY fav ASC,  name ASC)
+ *   This naming follows the same convention used throughout the rest of MegaApi.
+ *
+ * Example (obtaining cursor from last node on a page):
+ * @code
+ *   MegaNode* last = nodeList->get(nodeList->size() - 1);
+ *   std::unique_ptr<MegaSearchCursorOffset> cursor(MegaSearchCursorOffset::createInstance());
+ *   cursor->setLastName(last->getName());
+ *   cursor->setLastHandle(last->getHandle());
+ *   cursor->setLastSize(last->getSize());   // when using ORDER_SIZE_ASC/DESC
+ * @endcode
+ */
+class MegaSearchCursorOffset
+{
+protected:
+    MegaSearchCursorOffset();
+
+public:
+    /**
+     * @brief Creates a new instance of MegaSearchCursorOffset
+     * @return A pointer of current type, a superclass of the private object.
+     *         You are the owner of the returned instance.
+     */
+    static MegaSearchCursorOffset* createInstance();
+
+    /**
+     * @brief Create a copy of this instance.
+     *
+     * The resulted instance is fully independent of the source instance.
+     * You are the owner of the returned instance.
+     *
+     * @return Copy of the current instance
+     */
+    virtual MegaSearchCursorOffset* copy() const;
+
+    virtual ~MegaSearchCursorOffset();
+
+    /**
+     * @brief Set the name of the last node returned in the previous page.
+     * @param lastName Name of the last node. Required for all sort orders.
+     */
+    virtual void setLastName(const char* lastName);
+
+    /**
+     * @brief Set the handle of the last node returned in the previous page.
+     * @param lastHandle Handle of the last node. Required for all sort orders.
+     */
+    virtual void setLastHandle(MegaHandle lastHandle);
+
+    /**
+     * @brief Set the size of the last node returned in the previous page.
+     * @param lastSize File size in bytes. Required for ORDER_SIZE_ASC / ORDER_SIZE_DESC.
+     */
+    virtual void setLastSize(int64_t lastSize);
+
+    /**
+     * @brief Set the modification time of the last node returned in the previous page.
+     * @param lastMtime Modification timestamp. Required for ORDER_MODIFICATION_ASC /
+     * ORDER_MODIFICATION_DESC.
+     */
+    virtual void setLastMtime(int64_t lastMtime);
+
+    /**
+     * @brief Set the label of the last node returned in the previous page.
+     * @param lastLabel Node label value. Required for ORDER_LABEL_ASC / ORDER_LABEL_DESC.
+     */
+    virtual void setLastLabel(int lastLabel);
+
+    /**
+     * @brief Set the favourite flag of the last node returned in the previous page.
+     * @param lastFav Favourite value (0 or 1). Required for ORDER_FAV_ASC / ORDER_FAV_DESC.
+     */
+    virtual void setLastFav(int lastFav);
+
+    /**
+     * @brief Return the name of the last node.
+     * @return Name set via setLastName(), or nullptr if not set.
+     */
+    virtual const char* getLastName() const;
+
+    /**
+     * @brief Return the handle of the last node.
+     * @return Handle set via setLastHandle(), or INVALID_HANDLE if not set.
+     */
+    virtual MegaHandle getLastHandle() const;
+
+    /**
+     * @brief Return the size of the last node.
+     * @return Size set via setLastSize(), or -1 if not set.
+     */
+    virtual int64_t getLastSize() const;
+
+    /**
+     * @brief Return the modification time of the last node.
+     * @return Mtime set via setLastMtime(), or -1 if not set.
+     */
+    virtual int64_t getLastMtime() const;
+
+    /**
+     * @brief Return the label of the last node.
+     * @return Label set via setLastLabel(), or -1 if not set.
+     */
+    virtual int getLastLabel() const;
+
+    /**
+     * @brief Return the favourite flag of the last node.
+     * @return Fav value set via setLastFav(), or -1 if not set.
+     */
+    virtual int getLastFav() const;
+};
+
+/**
  * @brief Store pagination options used in searches @see MegaApi::search, MegaApi::getChildren.
  *
  */
@@ -18775,22 +18905,24 @@ class MegaApi
             ORDER_SHARE_CREATION_DESC = 22,
         };
 
-        enum { FILE_TYPE_DEFAULT = 0, // FILE_TYPE_UNKNOWN already exists at WinBase.h
-               FILE_TYPE_PHOTO,
-               FILE_TYPE_AUDIO,
-               FILE_TYPE_VIDEO,
-               FILE_TYPE_DOCUMENT,
-               FILE_TYPE_PDF,
-               FILE_TYPE_PRESENTATION,
-               FILE_TYPE_ARCHIVE,
-               FILE_TYPE_PROGRAM,
-               FILE_TYPE_MISC,
-               FILE_TYPE_SPREADSHEET,
-               FILE_TYPE_ALL_DOCS, // any of {DOCUMENT, PDF, PRESENTATION, SPREADSHEET}
-               FILE_TYPE_OTHERS,
-               FILE_TYPE_ALL_VISUAL_MEDIA, // any of {PHOTO, VIDEO}
-               FILE_TYPE_LAST = FILE_TYPE_ALL_VISUAL_MEDIA,
-             };
+        enum
+        {
+            FILE_TYPE_DEFAULT = 0, // FILE_TYPE_UNKNOWN already exists at WinBase.h
+            FILE_TYPE_PHOTO,
+            FILE_TYPE_AUDIO,
+            FILE_TYPE_VIDEO,
+            FILE_TYPE_DOCUMENT,
+            FILE_TYPE_PDF,
+            FILE_TYPE_PRESENTATION,
+            FILE_TYPE_ARCHIVE,
+            FILE_TYPE_PROGRAM,
+            FILE_TYPE_MISC,
+            FILE_TYPE_SPREADSHEET,
+            FILE_TYPE_ALL_DOCS, // any of {DOCUMENT, PDF, PRESENTATION, SPREADSHEET}
+            FILE_TYPE_OTHERS,
+            FILE_TYPE_ALL_VISUAL_MEDIA, // any of {PHOTO, VIDEO}
+            FILE_TYPE_LAST = FILE_TYPE_ALL_VISUAL_MEDIA,
+        };
 
         enum { SEARCH_TARGET_INSHARE = 0,
                SEARCH_TARGET_OUTSHARE,
@@ -20116,6 +20248,53 @@ class MegaApi
          * @return List with found nodes as MegaNode objects
          */
         MegaNodeList* search(const MegaSearchFilter* filter, int order = ORDER_NONE, MegaCancelToken* cancelToken = nullptr, const MegaSearchPage* searchPage = nullptr);
+
+        /**
+         * @brief List all nodes using cursor-based pagination with MIME type filtering.
+         *
+         * Unlike search() which traverses a subtree, this method queries the
+         * entire nodes table with a simple flat query.  This makes it significantly faster for
+         * global pagination use-cases.
+         *
+         * Cursor-based pagination guarantees that no items are skipped if nodes are deleted
+         * between page requests, unlike the offset-based search().
+         *
+         * Supported sort orders:
+         *   - ORDER_DEFAULT_ASC  / ORDER_DEFAULT_DESC
+         *   - ORDER_SIZE_ASC     / ORDER_SIZE_DESC
+         *   - ORDER_MODIFICATION_ASC / ORDER_MODIFICATION_DESC
+         *   - ORDER_LABEL_ASC    / ORDER_LABEL_DESC
+         *   - ORDER_FAV_ASC      / ORDER_FAV_DESC
+         *
+         * To build a cursor for the next page, populate a MegaSearchCursorOffset from the last
+         * MegaNode in the returned list.  The fields required depend on the sort order; see
+         * MegaSearchCursorOffset for details.
+         *
+         * For best performance, ensure search DB indexes are enabled (they are by default):
+         * @code
+         *   megaApi->enableSearchDBIndexes(true);
+         * @endcode
+         *
+         * @param mimeType     Mandatory MIME type category filter (see FILE_TYPE_* constants).
+         *                     Must be one of FILE_TYPE_PHOTO, FILE_TYPE_AUDIO, FILE_TYPE_VIDEO,
+         *                     FILE_TYPE_DOCUMENT, FILE_TYPE_PDF, FILE_TYPE_PRESENTATION,
+         *                     FILE_TYPE_ARCHIVE, FILE_TYPE_PROGRAM, FILE_TYPE_MISC,
+         *                     FILE_TYPE_SPREADSHEET, FILE_TYPE_OTHERS, FILE_TYPE_ALL_DOCS, or
+         *                     FILE_TYPE_ALL_VISUAL_MEDIA.  FILE_TYPE_DEFAULT is not valid.
+         * @param order        Sort order constant (see supported values above).
+         * @param cancelToken  Optional cancellation token; may be null.
+         * @param maxElements  Maximum number of nodes to return per page (0 = no limit).
+         * @param cursor       Cursor from the last node of the previous page, or nullptr for the
+         *                     first page.
+         *
+         * @return List of MegaNode objects for this page, or an empty list when there are no more
+         *         results.  The caller takes ownership and must delete the returned object.
+         */
+        MegaNodeList* listAllNodesByPage(int mimeType,
+                                         int order,
+                                         MegaCancelToken* cancelToken,
+                                         size_t maxElements,
+                                         const MegaSearchCursorOffset* cursor);
 
         /**
          * @brief Get a list of buckets, each bucket containing a list of recently added/modified

@@ -23,6 +23,7 @@
 
 #include <limits>
 #include <numeric>
+#include <sstream>
 
 #ifdef USE_SQLITE
 namespace mega {
@@ -1264,18 +1265,91 @@ void SqliteAccountState::createIndexes(bool enableIndexesForSearching,
             LOG_err << "Data base error while creating index (shareindex): " << sqlite3_errmsg(db);
         }
 
-        sql = "CREATE INDEX IF NOT EXISTS favindex on nodes (fav)";
-        result = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr);
-        if (result)
-        {
-            LOG_err << "Data base error while creating index (favindex): " << sqlite3_errmsg(db);
-        }
-
         sql = "CREATE INDEX IF NOT EXISTS ctimeindex on nodes (type, ctime DESC)";
         result = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr);
         if (result)
         {
             LOG_err << "Data base error while creating index (ctimeindex): " << sqlite3_errmsg(db);
+        }
+
+        // Column layout mirrors buildOrderByForListAll:
+        //   mimetypeVirtual — equality seek for the mandatory MIME filter
+        //   <sort key(s)>   — covers ORDER BY without a filesort
+        //   nodehandle      — unique tiebreaker, avoids extra lookup
+
+        // Index for ORDER_DEFAULT_ASC / ORDER_DEFAULT_DESC.
+        // name COLLATE NATURALNOCASE must carry the collation to match
+        // "name COLLATE NATURALNOCASE" in the ORDER BY.
+        sql = "CREATE INDEX IF NOT EXISTS listallnodesdefaultidx on nodes "
+              "(mimetypeVirtual, name COLLATE NATURALNOCASE, nodehandle)";
+        result = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr);
+        if (result)
+        {
+            LOG_err << "Data base error while creating index (listallnodesdefaultidx): "
+                    << sqlite3_errmsg(db);
+        }
+
+        // Index for ORDER_MODIFICATION_ASC / ORDER_MODIFICATION_DESC.
+        sql = "CREATE INDEX IF NOT EXISTS listallnodesmtimeidx on nodes "
+              "(mimetypeVirtual, mtime, name COLLATE NATURALNOCASE, nodehandle)";
+        result = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr);
+        if (result)
+        {
+            LOG_err << "Data base error while creating index (listallnodesmtimeidx): "
+                    << sqlite3_errmsg(db);
+        }
+
+        // Index for ORDER_SIZE_ASC / ORDER_SIZE_DESC.
+        sql = "CREATE INDEX IF NOT EXISTS listallnodessizeidx on nodes "
+              "(mimetypeVirtual, sizeVirtual, name COLLATE NATURALNOCASE, nodehandle)";
+        result = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr);
+        if (result)
+        {
+            LOG_err << "Data base error while creating index (listallnodessizeidx): "
+                    << sqlite3_errmsg(db);
+        }
+
+        // Index for ORDER_FAV_ASC (ORDER BY fav DESC, name ASC, nodehandle ASC).
+        sql = "CREATE INDEX IF NOT EXISTS listallnodesfavidx on nodes "
+              "(mimetypeVirtual, fav DESC, name COLLATE NATURALNOCASE, nodehandle)";
+        result = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr);
+        if (result)
+        {
+            LOG_err << "Data base error while creating index (listallnodesfavidx): "
+                    << sqlite3_errmsg(db);
+        }
+
+        // Index for ORDER_FAV_DESC (ORDER BY fav ASC, name ASC, nodehandle ASC).
+        sql = "CREATE INDEX IF NOT EXISTS listallnodesfavdescidx on nodes "
+              "(mimetypeVirtual, fav ASC, name COLLATE NATURALNOCASE, nodehandle)";
+        result = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr);
+        if (result)
+        {
+            LOG_err << "Data base error while creating index (listallnodesfavdescidx): "
+                    << sqlite3_errmsg(db);
+        }
+
+        // Index for ORDER_LABEL_ASC
+        // (ORDER BY CASE WHEN label=0 THEN 1 ELSE 0 END ASC, label ASC, name ASC).
+        // The expression column lets SQLite cover the ORDER BY expression without a filesort.
+        sql = "CREATE INDEX IF NOT EXISTS listallnodeslabelidx on nodes "
+              "(mimetypeVirtual, (CASE WHEN label = 0 THEN 1 ELSE 0 END), label, "
+              "name COLLATE NATURALNOCASE, nodehandle)";
+        result = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr);
+        if (result)
+        {
+            LOG_err << "Data base error while creating index (listallnodeslabelidx): "
+                    << sqlite3_errmsg(db);
+        }
+
+        // Index for ORDER_LABEL_DESC (ORDER BY label DESC, name ASC, nodehandle ASC).
+        sql = "CREATE INDEX IF NOT EXISTS listallnodeslabeldescidx on nodes "
+              "(mimetypeVirtual, label DESC, name COLLATE NATURALNOCASE, nodehandle)";
+        result = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, nullptr);
+        if (result)
+        {
+            LOG_err << "Data base error while creating index (listallnodeslabeldescidx): "
+                    << sqlite3_errmsg(db);
         }
     }
     if (enableIndexesForLexicographicalList)
@@ -1293,7 +1367,16 @@ void SqliteAccountState::createIndexes(bool enableIndexesForSearching,
 
 void SqliteAccountState::dropSearchDBIndexes()
 {
-    dropDBIndexes({"shareindex", "favindex", "ctimeindex"});
+    dropDBIndexes({"shareindex",
+                   "favindex",
+                   "ctimeindex",
+                   "listallnodesdefaultidx",
+                   "listallnodesmtimeidx",
+                   "listallnodessizeidx",
+                   "listallnodesfavidx",
+                   "listallnodesfavdescidx",
+                   "listallnodeslabelidx",
+                   "listallnodeslabeldescidx"});
 }
 
 void SqliteAccountState::dropLexicographicDBIndexes()
@@ -1391,6 +1474,12 @@ void SqliteAccountState::finalise()
         sqlite3_finalize(s.second);
     }
     mStmtSearchNodes.clear();
+
+    for (auto& s: mStmtListAllNodesByPage)
+    {
+        sqlite3_finalize(s.second);
+    }
+    mStmtListAllNodesByPage.clear();
 
     sqlite3_finalize(mStmtNodeTagsBelow);
     mStmtNodeTagsBelow = nullptr;
@@ -2371,6 +2460,551 @@ bool SqliteAccountState::searchNodes(const NodeSearchFilter& filter,
 
     errorHandler(sqlResult, "Search nodes with filter", true);
 
+    sqlite3_reset(stmt);
+
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// listAllNodesByPage helpers (cursor-based pagination)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+// ORDER BY clause for listAllNodesByPage.
+std::string buildOrderByForListAll(int order)
+{
+    static const std::string nA = "name COLLATE NATURALNOCASE ASC";
+    static const std::string nD = "name COLLATE NATURALNOCASE DESC";
+    static const std::string hA = "nodehandle ASC";
+    static const std::string hD = "nodehandle DESC";
+
+    switch (order)
+    {
+        case OrderByClause::DEFAULT_ASC:
+            return nA + ", " + hA;
+        case OrderByClause::DEFAULT_DESC:
+            return nD + ", " + hD;
+        case OrderByClause::SIZE_ASC:
+            return "sizeVirtual ASC, " + nA + ", " + hA;
+        case OrderByClause::SIZE_DESC:
+            return "sizeVirtual DESC, " + nD + ", " + hD;
+        case OrderByClause::MTIME_ASC:
+            return "mtime ASC, " + nA + ", " + hA;
+        case OrderByClause::MTIME_DESC:
+            return "mtime DESC, " + nD + ", " + hD;
+        case OrderByClause::FAV_ASC:
+            return "fav DESC, " + nA + ", " + hA;
+        case OrderByClause::FAV_DESC:
+            return "fav ASC, " + nA + ", " + hA;
+        case OrderByClause::LABEL_ASC:
+            return "CASE WHEN label = 0 THEN 1 ELSE 0 END ASC, label ASC, " + nA + ", " + hA;
+        case OrderByClause::LABEL_DESC:
+            return "label DESC, " + nA + ", " + hA;
+        default:
+            return nA + ", " + hA;
+    }
+}
+
+// Parameter slot layout for listAllNodesByPage:
+//   ?1       = LIMIT (pageSize)   — always
+//   ?2       = mimeFilter         — only when mimeFilterNeedsParam == true
+//   ?2 or ?3 = cursor fields      — only when hasCursor == true
+//                (cursorStartParam = 2 + mimeFilterNeedsParam)
+//
+// Group mime types (ALL_DOCS, ALL_VISUAL_MEDIA) are expanded into one CTE per concrete
+// mime type with literal WHERE clauses, so they do not consume a parameter slot
+// (mimeFilterNeedsParam == false).
+
+static const QueryTagId kLaIdPageSize{1};
+
+// SQL fragment for the computed isZero column used by LABEL sort orders.
+static const std::string kLabelIsZeroExpr = "(CASE WHEN label = 0 THEN 1 ELSE 0 END)";
+
+// Range pre-filter on the primary sort key(s) so SQLite can seek to the cursor position
+// via an index rather than scanning all preceding rows. For low-cardinality keys (FAV,
+// LABEL, SIZE, MTIME) the secondary key (name) is also included to handle collisions.
+// handle is not used here (left to the cursor WHERE for exact tie-breaking).
+// Slots used by this function:
+//   DEFAULT_ASC/DESC  : p1=name
+//   SIZE_ASC/DESC     : p1=size,   p2=name
+//   MTIME_ASC/DESC    : p1=mtime,  p2=name
+//   FAV_ASC/DESC      : p1=fav,    p2=name
+//   LABEL_ASC         : p1=isZero, p2=label, p3=name
+//   LABEL_DESC        : p1=label,  p2=name
+std::string buildBoundingWhereForListAll(int order, int startParam)
+{
+    const std::string p1 = "?" + std::to_string(startParam);
+    const std::string p2 = "?" + std::to_string(startParam + 1);
+
+    switch (order)
+    {
+        case OrderByClause::DEFAULT_ASC:
+            // p1=name; rows after cursor have name >= cursor.name
+            return "name >= " + p1 + " COLLATE NATURALNOCASE";
+
+        case OrderByClause::DEFAULT_DESC:
+            // p1=name; rows after cursor have name <= cursor.name
+            return "name <= " + p1 + " COLLATE NATURALNOCASE";
+
+        case OrderByClause::MTIME_ASC:
+            // p1=mtime, p2=name; ORDER BY mtime ASC, name ASC, nodehandle ASC
+            return "(mtime > " + p1 + " OR (mtime = " + p1 + " AND name >= " + p2 +
+                   " COLLATE NATURALNOCASE))";
+
+        case OrderByClause::MTIME_DESC:
+            // p1=mtime, p2=name; ORDER BY mtime DESC, name DESC, nodehandle DESC
+            return "(mtime < " + p1 + " OR (mtime = " + p1 + " AND name <= " + p2 +
+                   " COLLATE NATURALNOCASE))";
+
+        case OrderByClause::SIZE_ASC:
+            // p1=size, p2=name; ORDER BY sizeVirtual ASC, name ASC, nodehandle ASC
+            return "(sizeVirtual > " + p1 + " OR (sizeVirtual = " + p1 + " AND name >= " + p2 +
+                   " COLLATE NATURALNOCASE))";
+
+        case OrderByClause::SIZE_DESC:
+            // p1=size, p2=name; ORDER BY sizeVirtual DESC, name DESC, nodehandle DESC
+            return "(sizeVirtual < " + p1 + " OR (sizeVirtual = " + p1 + " AND name <= " + p2 +
+                   " COLLATE NATURALNOCASE))";
+
+        case OrderByClause::FAV_ASC:
+            // p1=fav, p2=name; ORDER BY fav DESC → lower fav or same fav with name >=
+            return "(fav < " + p1 + " OR (fav = " + p1 + " AND name >= " + p2 +
+                   " COLLATE NATURALNOCASE))";
+
+        case OrderByClause::FAV_DESC:
+            // p1=fav, p2=name; ORDER BY fav ASC → higher fav or same fav with name >=
+            return "(fav > " + p1 + " OR (fav = " + p1 + " AND name >= " + p2 +
+                   " COLLATE NATURALNOCASE))";
+
+        case OrderByClause::LABEL_ASC:
+        {
+            // p1=isZero, p2=label, p3=name; ORDER BY isZero ASC, label ASC, name ASC
+            // (isZero=0 → labelled rows first; isZero=1 → unlabelled rows last)
+            const std::string p3 = "?" + std::to_string(startParam + 2);
+            return "(" + kLabelIsZeroExpr + " > " + p1 + " OR (" + kLabelIsZeroExpr + " = " + p1 +
+                   " AND label > " + p2 +
+                   ")"
+                   " OR (" +
+                   kLabelIsZeroExpr + " = " + p1 + " AND label = " + p2 + " AND name >= " + p3 +
+                   " COLLATE NATURALNOCASE))";
+        }
+
+        case OrderByClause::LABEL_DESC:
+            // p1=label, p2=name; ORDER BY label DESC → smaller label or same label with name >=
+            return "(label < " + p1 + " OR (label = " + p1 + " AND name >= " + p2 +
+                   " COLLATE NATURALNOCASE))";
+
+        default:
+            return buildBoundingWhereForListAll(OrderByClause::DEFAULT_ASC, startParam);
+    }
+}
+
+// Cursor WHERE clause for resuming pagination at the row after the last seen item.
+// `type` is omitted since all results are FILENODEs. startParam is the first ?N slot.
+// Slot layout matches bindCursorParamsForListAll:
+//   DEFAULT_ASC/DESC  : p1=name,   p2=handle
+//   SIZE_ASC/DESC     : p1=size,   p2=name,  p3=handle
+//   MTIME_ASC/DESC    : p1=mtime,  p2=name,  p3=handle
+//   FAV_ASC/DESC      : p1=fav,    p2=name,  p3=handle
+//   LABEL_ASC         : p1=isZero, p2=label, p3=name, p4=handle
+//   LABEL_DESC        : p1=label,  p2=name,  p3=handle
+std::string buildCursorWhereForListAll(int order, int startParam)
+{
+    const std::string p1 = "?" + std::to_string(startParam);
+    const std::string p2 = "?" + std::to_string(startParam + 1);
+    const std::string p3 = "?" + std::to_string(startParam + 2);
+    const std::string p4 = "?" + std::to_string(startParam + 3);
+
+    switch (order)
+    {
+        case OrderByClause::DEFAULT_ASC:
+            // ORDER BY name ASC, nodehandle ASC
+            return "(name > " + p1 +
+                   " COLLATE NATURALNOCASE"
+                   " OR (name = " +
+                   p1 + " COLLATE NATURALNOCASE AND nodehandle > " + p2 + "))";
+
+        case OrderByClause::DEFAULT_DESC:
+            // ORDER BY name DESC, nodehandle DESC
+            return "(name < " + p1 +
+                   " COLLATE NATURALNOCASE"
+                   " OR (name = " +
+                   p1 + " COLLATE NATURALNOCASE AND nodehandle < " + p2 + "))";
+
+        case OrderByClause::SIZE_ASC:
+            // ORDER BY sizeVirtual ASC, name ASC, nodehandle ASC
+            return "(sizeVirtual > " + p1 + " OR (sizeVirtual = " + p1 + " AND name > " + p2 +
+                   " COLLATE NATURALNOCASE)"
+                   " OR (sizeVirtual = " +
+                   p1 + " AND name = " + p2 + " COLLATE NATURALNOCASE AND nodehandle > " + p3 +
+                   "))";
+
+        case OrderByClause::SIZE_DESC:
+            // ORDER BY sizeVirtual DESC, name DESC, nodehandle DESC
+            return "(sizeVirtual < " + p1 + " OR (sizeVirtual = " + p1 + " AND name < " + p2 +
+                   " COLLATE NATURALNOCASE)"
+                   " OR (sizeVirtual = " +
+                   p1 + " AND name = " + p2 + " COLLATE NATURALNOCASE AND nodehandle < " + p3 +
+                   "))";
+
+        case OrderByClause::MTIME_ASC:
+            // ORDER BY mtime ASC, name ASC, nodehandle ASC
+            return "(mtime > " + p1 + " OR (mtime = " + p1 + " AND name > " + p2 +
+                   " COLLATE NATURALNOCASE)"
+                   " OR (mtime = " +
+                   p1 + " AND name = " + p2 + " COLLATE NATURALNOCASE AND nodehandle > " + p3 +
+                   "))";
+
+        case OrderByClause::MTIME_DESC:
+            // ORDER BY mtime DESC, name DESC, nodehandle DESC
+            return "(mtime < " + p1 + " OR (mtime = " + p1 + " AND name < " + p2 +
+                   " COLLATE NATURALNOCASE)"
+                   " OR (mtime = " +
+                   p1 + " AND name = " + p2 + " COLLATE NATURALNOCASE AND nodehandle < " + p3 +
+                   "))";
+
+        case OrderByClause::FAV_ASC:
+            // ORDER BY fav DESC, name ASC, nodehandle ASC
+            return "(fav < " + p1 + " OR (fav = " + p1 + " AND name > " + p2 +
+                   " COLLATE NATURALNOCASE)"
+                   " OR (fav = " +
+                   p1 + " AND name = " + p2 + " COLLATE NATURALNOCASE AND nodehandle > " + p3 +
+                   "))";
+
+        case OrderByClause::FAV_DESC:
+            // ORDER BY fav ASC, name ASC, nodehandle ASC
+            return "(fav > " + p1 + " OR (fav = " + p1 + " AND name > " + p2 +
+                   " COLLATE NATURALNOCASE)"
+                   " OR (fav = " +
+                   p1 + " AND name = " + p2 + " COLLATE NATURALNOCASE AND nodehandle > " + p3 +
+                   "))";
+
+        case OrderByClause::LABEL_ASC:
+        {
+            // ORDER BY (CASE WHEN label=0 THEN 1 ELSE 0 END) ASC, label ASC, name ASC, nodehandle
+            // ASC
+            return "(" + kLabelIsZeroExpr + " > " + p1 + " OR (" + kLabelIsZeroExpr + " = " + p1 +
+                   " AND label > " + p2 +
+                   ")"
+                   " OR (" +
+                   kLabelIsZeroExpr + " = " + p1 + " AND label = " + p2 + " AND name > " + p3 +
+                   " COLLATE NATURALNOCASE)"
+                   " OR (" +
+                   kLabelIsZeroExpr + " = " + p1 + " AND label = " + p2 + " AND name = " + p3 +
+                   " COLLATE NATURALNOCASE AND nodehandle > " + p4 + "))";
+        }
+
+        case OrderByClause::LABEL_DESC:
+            // ORDER BY label DESC, name ASC, nodehandle ASC
+            return "(label < " + p1 + " OR (label = " + p1 + " AND name > " + p2 +
+                   " COLLATE NATURALNOCASE)"
+                   " OR (label = " +
+                   p1 + " AND name = " + p2 + " COLLATE NATURALNOCASE AND nodehandle > " + p3 +
+                   "))";
+
+        default:
+            return buildCursorWhereForListAll(OrderByClause::DEFAULT_ASC, startParam);
+    }
+}
+
+// Binds cursor parameters for the given sort order into stmt starting at startParam.
+// Returns false if the cursor is missing the required field for that order.
+bool bindCursorParamsForListAll(int& sqlResult,
+                                sqlite3_stmt* stmt,
+                                int order,
+                                int startParam,
+                                const NodeSearchCursorOffset& cursor)
+{
+    const int kP1 = startParam;
+    const int kP2 = startParam + 1;
+    const int kP3 = startParam + 2;
+    const int kP4 = startParam + 3;
+
+    const auto bindI64 = sqlite3_bind_int64;
+    const auto bindI = sqlite3_bind_int;
+    const sqlite3_int64 h = static_cast<sqlite3_int64>(cursor.mLastHandle);
+
+    switch (order)
+    {
+        case OrderByClause::DEFAULT_ASC:
+        case OrderByClause::DEFAULT_DESC:
+            bindText(sqlResult, stmt, kP1, cursor.mLastName);
+            bindValue(sqlResult, stmt, kP2, h, bindI64);
+            break;
+
+        case OrderByClause::SIZE_ASC:
+        case OrderByClause::SIZE_DESC:
+            if (!cursor.mLastSize.has_value())
+                return false;
+            bindValue(sqlResult, stmt, kP1, *cursor.mLastSize, bindI64);
+            bindText(sqlResult, stmt, kP2, cursor.mLastName);
+            bindValue(sqlResult, stmt, kP3, h, bindI64);
+            break;
+
+        case OrderByClause::MTIME_ASC:
+        case OrderByClause::MTIME_DESC:
+            if (!cursor.mLastMtime.has_value())
+                return false;
+            bindValue(sqlResult, stmt, kP1, *cursor.mLastMtime, bindI64);
+            bindText(sqlResult, stmt, kP2, cursor.mLastName);
+            bindValue(sqlResult, stmt, kP3, h, bindI64);
+            break;
+
+        case OrderByClause::FAV_ASC:
+        case OrderByClause::FAV_DESC:
+            if (!cursor.mLastFav.has_value())
+                return false;
+            bindValue(sqlResult, stmt, kP1, *cursor.mLastFav, bindI64);
+            bindText(sqlResult, stmt, kP2, cursor.mLastName);
+            bindValue(sqlResult, stmt, kP3, h, bindI64);
+            break;
+
+        case OrderByClause::LABEL_ASC:
+        {
+            if (!cursor.mLastLabel.has_value())
+                return false;
+            const int isZero = (*cursor.mLastLabel == 0) ? 1 : 0;
+            bindValue(sqlResult, stmt, kP1, isZero, bindI);
+            bindValue(sqlResult, stmt, kP2, *cursor.mLastLabel, bindI);
+            bindText(sqlResult, stmt, kP3, cursor.mLastName);
+            bindValue(sqlResult, stmt, kP4, h, bindI64);
+            break;
+        }
+
+        case OrderByClause::LABEL_DESC:
+            if (!cursor.mLastLabel.has_value())
+                return false;
+            bindValue(sqlResult, stmt, kP1, *cursor.mLastLabel, bindI);
+            bindText(sqlResult, stmt, kP2, cursor.mLastName);
+            bindValue(sqlResult, stmt, kP3, h, bindI64);
+            break;
+
+        default:
+            return bindCursorParamsForListAll(sqlResult,
+                                              stmt,
+                                              OrderByClause::DEFAULT_ASC,
+                                              startParam,
+                                              cursor);
+    }
+    return true;
+}
+
+// Result columns for listAllNodesByPage (omits ctime, which no sort order uses).
+const std::string& listAllNodesResultCols()
+{
+    static const std::string s{"nodehandle, counter, node, "
+                               "type, sizeVirtual, mtime, name, label, fav"};
+    return s;
+}
+
+bool isGroupMimeTypeForListAll(const MimeType_t mimeType)
+{
+    return mimeType == MIME_TYPE_ALL_DOCS || mimeType == MIME_TYPE_ALL_VISUAL_MEDIA;
+}
+
+const std::vector<MimeType_t>& groupedMimeTypesForListAll(const MimeType_t mimeType)
+{
+    static const std::vector<MimeType_t> docs = {MIME_TYPE_DOCUMENT,
+                                                 MIME_TYPE_PDF,
+                                                 MIME_TYPE_PRESENTATION,
+                                                 MIME_TYPE_SPREADSHEET};
+    static const std::vector<MimeType_t> visualMedia = {MIME_TYPE_PHOTO, MIME_TYPE_VIDEO};
+    static const std::vector<MimeType_t> empty;
+
+    switch (mimeType)
+    {
+        case MIME_TYPE_ALL_DOCS:
+            return docs;
+        case MIME_TYPE_ALL_VISUAL_MEDIA:
+            return visualMedia;
+        default:
+            assert(false && "Unexpected grouped MIME type");
+            return empty;
+    }
+}
+
+std::string buildWhereClauseForListAll(const std::vector<std::string>& conditions)
+{
+    if (conditions.empty())
+    {
+        return {};
+    }
+
+    std::string whereClause = "WHERE ";
+    for (size_t i = 0; i < conditions.size(); ++i)
+    {
+        if (i > 0)
+        {
+            whereClause += " AND ";
+        }
+        whereClause += conditions[i];
+    }
+    whereClause += " \n";
+
+    return whereClause;
+}
+
+// Builds a single-route SELECT for listAllNodesByPage given a mime filter condition
+// (either a literal value for grouped/CTE routes or a bound parameter for simple ones).
+std::string buildListAllRouteSelect(const std::string& mimeFilterClause,
+                                    int order,
+                                    bool hasCursor,
+                                    int cursorStartParam)
+{
+    std::vector<std::string> conditions;
+    conditions.push_back(mimeFilterClause);
+
+    if (hasCursor)
+    {
+        conditions.push_back(buildBoundingWhereForListAll(order, cursorStartParam));
+        conditions.push_back(buildCursorWhereForListAll(order, cursorStartParam));
+    }
+
+    return "SELECT " + listAllNodesResultCols() +
+           " \n"
+           "FROM nodes \n" +
+           buildWhereClauseForListAll(std::move(conditions)) + "ORDER BY \n" +
+           buildOrderByForListAll(order) +
+           " \n"
+           "LIMIT " +
+           kLaIdPageSize;
+}
+
+std::string
+    buildGroupedListAllQuery(MimeType_t mimeType, int order, bool hasCursor, int cursorStartParam)
+{
+    assert(isGroupMimeTypeForListAll(mimeType));
+
+    const auto& routeMimeTypes = groupedMimeTypesForListAll(mimeType);
+    std::string ctes;
+    std::string merged;
+
+    for (size_t i = 0; i < routeMimeTypes.size(); ++i)
+    {
+        const std::string routeName = "route" + std::to_string(i);
+        if (!ctes.empty())
+        {
+            ctes += ",\n\n";
+            merged += "UNION ALL\n";
+        }
+
+        ctes += routeName + " AS (\n" +
+                buildListAllRouteSelect("mimetypeVirtual = " +
+                                            std::to_string(static_cast<int>(routeMimeTypes[i])),
+                                        order,
+                                        hasCursor,
+                                        cursorStartParam) +
+                "\n)";
+        merged += "SELECT " + listAllNodesResultCols() + " \nFROM " + routeName + "\n";
+    }
+
+    return "WITH \n\n" + ctes +
+           "\n\n"
+           "SELECT " +
+           listAllNodesResultCols() +
+           " \n"
+           "FROM (\n" +
+           merged +
+           ") AS merged \n"
+           "ORDER BY \n" +
+           buildOrderByForListAll(order) +
+           " \n"
+           "LIMIT " +
+           kLaIdPageSize;
+}
+
+} // anonymous namespace (listAllNodesByPage helpers)
+
+bool SqliteAccountState::listAllNodesByPage(
+    MimeType_t mimeType,
+    int order,
+    std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes,
+    CancelToken cancelFlag,
+    size_t maxElements,
+    const std::optional<NodeSearchCursorOffset>& cursor)
+{
+    if (!db)
+        return false;
+
+    if (mimeType == MIME_TYPE_UNKNOWN)
+    {
+        LOG_err << "listAllNodesByPage: invalid mimeType value " << mimeType;
+        return false;
+    }
+
+    if (cancelFlag.exists())
+        sqlite3_progress_handler(db,
+                                 NUM_VIRTUAL_MACHINE_INSTRUCTIONS,
+                                 SqliteAccountState::progressHandler,
+                                 static_cast<void*>(&cancelFlag));
+
+    const bool hasCursor = cursor.has_value();
+
+    // Group types are expanded into one top-N CTE per concrete mime, merged with UNION ALL.
+    const bool isGroupMimeType = isGroupMimeTypeForListAll(mimeType);
+    // Group mime types use literal per-route WHERE clauses in CTEs — no parameter slot needed.
+    const bool mimeFilterNeedsParam = !isGroupMimeType;
+
+    // Cache key encodes the three dimensions that affect the SQL text.
+    // Stride must cover all valid order values. Update if new OrderByClause values are
+    // added beyond FAV_DESC, and adjust the assert to the new maximum.
+    static_assert(OrderByClause::FAV_DESC == 20,
+                  "FAV_DESC changed; verify kListAllOrderStride still covers all order values");
+    constexpr size_t kListAllOrderStride = static_cast<size_t>(OrderByClause::FAV_DESC) + 1;
+    const size_t cacheId =
+        (static_cast<size_t>(mimeType) * kListAllOrderStride + static_cast<size_t>(order)) * 2 +
+        (hasCursor ? 1u : 0u);
+    sqlite3_stmt*& stmt = mStmtListAllNodesByPage[cacheId];
+
+    // Slot after ?1=pageSize and optional mimeFilter.
+    const int mimeFilterParam = 2;
+    const int cursorStartParam = mimeFilterParam + (mimeFilterNeedsParam ? 1 : 0);
+
+    int sqlResult = SQLITE_OK;
+    if (!stmt)
+    {
+        std::string query;
+        if (isGroupMimeType)
+        {
+            query = buildGroupedListAllQuery(mimeType, order, hasCursor, cursorStartParam);
+        }
+        else
+        {
+            query = buildListAllRouteSelect("mimetypeVirtual = ?" + std::to_string(mimeFilterParam),
+                                            order,
+                                            hasCursor,
+                                            cursorStartParam);
+        }
+        sqlResult = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, nullptr);
+        if (sqlResult != SQLITE_OK)
+        {
+            sqlite3_progress_handler(db, -1, nullptr, nullptr);
+            errorHandler(sqlResult, "List all nodes by page (cursor-based)", true);
+            return false;
+        }
+    }
+
+    const sqlite3_int64 pageSize = maxElements == 0 ? -1 : static_cast<sqlite3_int64>(maxElements);
+    bindValue(sqlResult, stmt, kLaIdPageSize, pageSize, sqlite3_bind_int64);
+
+    if (mimeFilterNeedsParam)
+        bindValue(sqlResult, stmt, mimeFilterParam, static_cast<int>(mimeType), sqlite3_bind_int);
+
+    if (hasCursor && !bindCursorParamsForListAll(sqlResult, stmt, order, cursorStartParam, *cursor))
+    {
+        LOG_err << "listAllNodesByPage: cursor is missing the required field for order " << order
+                << "; cursor was likely built for a different sort order";
+        sqlite3_progress_handler(db, -1, nullptr, nullptr);
+        sqlite3_reset(stmt);
+        return false;
+    }
+
+    const bool result = (sqlResult == SQLITE_OK) && processSqlQueryNodes(stmt, nodes);
+
+    sqlite3_progress_handler(db, -1, nullptr, nullptr);
+    errorHandler(sqlResult, "List all nodes by page (cursor-based)", true);
     sqlite3_reset(stmt);
 
     return result;
