@@ -1522,9 +1522,9 @@ public:
 
     MegaHandle getCommander();
 
-    void testChat(bool isPublicChat);
+    void testChat(bool isPublicChat, bool useStreamingMode);
 
-    void testGiveRemoveChatAccess(bool isPublicChat);
+    void testGiveRemoveChatAccess(bool isPublicChat, bool useStreamingMode);
 #endif
 
     template<typename... requestArgs>

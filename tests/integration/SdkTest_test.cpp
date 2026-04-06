@@ -389,6 +389,7 @@ void SdkTest::TearDown()
     {
         releaseMegaApi(i);
     }
+    sdk_test::resetScParserMode();
     out() << "Teardown done, test exiting";
 }
 
@@ -1068,8 +1069,10 @@ void SdkTest::createChat(bool group, MegaTextChatPeerList* peers, bool isPublicC
         << "Chat creation failed (error: " << mApi[static_cast<size_t>(apiIndex)].lastError << ")";
 }
 
-void SdkTest::testChat(bool isPublicChat)
+void SdkTest::testChat(bool isPublicChat, bool useStreamingMode)
 {
+    sdk_test::setScParserMode(useStreamingMode);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
 
     // --- Send a new contact request ---
@@ -1353,9 +1356,12 @@ MegaHandle SdkTest::getCommander()
     return handle;
 }
 
-void SdkTest::testGiveRemoveChatAccess(bool isPublicChat)
+void SdkTest::testGiveRemoveChatAccess(bool isPublicChat, bool useStreamingMode)
 {
+    sdk_test::setScParserMode(useStreamingMode);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
+
     const unsigned int host = 0;
     const unsigned int guest = 1;
     mApi[host].chats.clear();
@@ -3213,6 +3219,26 @@ auto importNode(MegaApi& client, const std::string& link, const MegaNode& parent
     return makeUniqueFrom(node);
 }
 
+/**
+ * Action Packet streaming and non-streaming parsing modes will coexist for some time. To ensure
+ * both modes function correctly, test cases should cover both modes.
+ * Below test cases force to execute in streaming mode.
+ * - SdkTest.SdkTestShares
+ * - SdkTest.SdkTestChat
+ * - SdkTest.SdkTestSetsAndElements
+ * - SdkTest.SdkTestUploads
+ * - SdkTest.SdkTestGiveRemovePublicChatAccess
+ * - SdkTest.SdkTestRemovePublicLinkSet
+ * Below test cases force execute in non-streaming mode.
+ * - SdkTest.SdkTestTransfers
+ * - SdkTest.SdkTestContacts
+ * - SdkTest.SdkTestShares2
+ * - SdkTest.SdkTestPublicChat
+ * - SdkTest.SdkTestSetsAndElementsPublicLink
+ * - SdkTest.SdkTestGiveRemoveChatAccess
+ * Above test cases can cover the majority of action packet processing scenarios.
+ */
+
 ///////////////////////////__ Tests using SdkTest __//////////////////////////////////
 /**
  * @brief TEST_F SdkTestCreateEphmeralPlusPlusAccount
@@ -4333,7 +4359,12 @@ TEST_F(SdkTestDownload, ConflictFileExistingName)
 TEST_F(SdkTest, SdkTestTransfers)
 {
     LOG_info << "___TEST Transfers___";
+
+    // Run in action packet non-streaming parsing mode
+    sdk_test::setScParserMode(false);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
+
     LOG_info << cwd();
 
     // Make sure our clients are working with pro plans.
@@ -4714,6 +4745,10 @@ TEST_F(SdkTest, SdkTestUndelete)
 TEST_F(SdkTest, SdkTestContacts)
 {
     LOG_info << "___TEST Contacts___";
+
+    // Run in action packet non-streaming parsing mode
+    sdk_test::setScParserMode(false);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
 
     ASSERT_TRUE(getFileFromArtifactory("test-data/" + AVATARSRC, AVATARSRC));
@@ -5692,6 +5727,9 @@ void SdkTestShares::createNodeTrees()
  */
 TEST_F(SdkTest, SdkTestShares2)
 {
+    // Run in action packet non-streaming parsing mode
+    sdk_test::setScParserMode(false);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
 
     // --- Create some nodes to share ---
@@ -5985,6 +6023,9 @@ TEST_F(SdkTest, SdkTestShares2)
  */
 TEST_F(SdkTest, SdkTestShares)
 {
+    // Run in action packet streaming parsing mode
+    sdk_test::setScParserMode(true);
+
     LOG_info << "___TEST Shares___";
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
 
@@ -8082,14 +8123,16 @@ TEST_F(SdkTest, SdkTestConsoleAutocomplete)
 TEST_F(SdkTest, SdkTestChat)
 {
     CASE_info << "started";
-    testChat(false);
+    // Run in action packet streaming parsing mode
+    testChat(false, true);
     CASE_info << "finished";
 }
 
 TEST_F(SdkTest, SdkTestPublicChat)
 {
     CASE_info << "started";
-    testChat(true);
+    // Run in action packet non-streaming parsing mode
+    testChat(true, false);
     CASE_info << "finished";
 }
 #endif
@@ -15941,6 +15984,10 @@ TEST_F(SdkTest, SdkNodesOnDemandVersions)
 TEST_F(SdkTest, SdkTestSetsAndElements)
 {
     LOG_info << "___TEST Sets and Elements___";
+
+    // Run in action packet streaming parsing mode
+    sdk_test::setScParserMode(true);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
 
     //  1. Create Set
@@ -16424,6 +16471,9 @@ TEST_F(SdkTest, SdkTestSetsAndElementsPublicLink)
     // U1: Sync fetch public Set on non-exported Set (using previously valid link), nullptr expected
     // U1: Remove all Sets
 
+    // Run in action packet non-streaming parsing mode
+    sdk_test::setScParserMode(false);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(2));
 
     // Use another connection with the same credentials as U1
@@ -16451,7 +16501,6 @@ TEST_F(SdkTest, SdkTestSetsAndElementsPublicLink)
     ASSERT_EQ(API_OK, loginTracker->waitForResult()) << " Failed to establish a login/session for account " << difApiIdx;
     loginTracker = asyncRequestFetchnodes(difApiIdx);
     ASSERT_EQ(API_OK, loginTracker->waitForResult()) << " Failed to fetch nodes for account " << difApiIdx;
-
 
     LOG_debug << "# U1: Create set";
     const string name = U8("qq-001");
@@ -18751,6 +18800,10 @@ void SdkTest::testResumableTrasfers(const std::string& data, const size_t timeou
 TEST_F(SdkTest, SdkTestUploads)
 {
     LOG_info << "___TEST Test Uploads___";
+
+    // Run in action packet streaming parsing mode
+    sdk_test::setScParserMode(true);
+
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
 
     // Make sure our clients are working with pro plans.
@@ -21134,7 +21187,8 @@ TEST_F(SdkTest, SetGetVisibleTermsOfService)
 TEST_F(SdkTest, SdkTestGiveRemoveChatAccess)
 {
     CASE_info << "started";
-    testGiveRemoveChatAccess(false);
+    // Run in action packet non-streaming parsing mode
+    testGiveRemoveChatAccess(false, false);
     CASE_info << "finished";
 }
 
@@ -21144,7 +21198,8 @@ TEST_F(SdkTest, SdkTestGiveRemoveChatAccess)
 TEST_F(SdkTest, SdkTestGiveRemovePublicChatAccess)
 {
     CASE_info << "started";
-    testGiveRemoveChatAccess(true);
+    // Run in action packet streaming parsing mode
+    testGiveRemoveChatAccess(true, true);
     CASE_info << "finished";
 }
 #endif
@@ -22879,6 +22934,10 @@ TEST_F(SdkTest, HashCashAbortDueToLogout)
 TEST_F(SdkTest, SdkTestRemovePublicLinkSet)
 {
     LOG_info << "___TEST SdkTestRemovePublicLinkSet";
+
+    // Run in action packet streaming parsing mode
+    sdk_test::setScParserMode(true);
+
     static const unsigned long primaryClientIdx{0};
     static const unsigned long secondaryClientIdx{1};
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
