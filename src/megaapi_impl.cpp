@@ -4032,10 +4032,22 @@ void MegaTransferPrivate::setLocalPath(const LocalPath& newPath)
     updateLocalPathInternal(newPath);
     LocalPath name = mLocalPath.leafName();
     setFileName(name.toPath(false).c_str());
-    LocalPath parent = mLocalPath.parentPath();
-    if (!parent.empty())
+
+    bool parentPathAvailable = true;
+#ifdef __ANDROID__
+    // On Android, parentPath() is invalid for a URI base path with no appended leaves
+    if (mLocalPath.isURI() && mLocalPath.isRootPath())
     {
-        setParentPath(parent.toPath(false).c_str());
+        parentPathAvailable = false;
+    }
+#endif
+    if (parentPathAvailable)
+    {
+        LocalPath parent = mLocalPath.parentPath();
+        if (!parent.empty())
+        {
+            setParentPath(parent.toPath(false).c_str());
+        }
     }
 }
 

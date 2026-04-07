@@ -128,7 +128,6 @@ public:
     // Returns the name of file/directory pointed by the URI
     virtual std::optional<string_type> getName(const string_type& uri) = 0;
     // Returns parent URI if it's available
-    virtual std::optional<string_type> getParentURI(const string_type& uri) = 0;
     virtual std::optional<string_type> getPath(const string_type& uri) = 0;
     virtual std::optional<string_type> getURI(const string_type& uri,
                                               const std::vector<string_type> leaves) = 0;
@@ -149,9 +148,6 @@ public:
 
     // Retrieve the name for a given path or URI
     static std::optional<string_type> getName(const string_type& uri);
-
-    // Retrieve the name for a given path or URI
-    static std::optional<string_type> getParentURI(const string_type& uri);
 
     static std::optional<string_type> getPath(const string_type& uri);
 
