@@ -145,6 +145,13 @@ void TreeFilters::initFilters()
                          return JSONSplitter::ResultFromBool(json->leavearray());
                      });
 
+    // End of tree object
+    mFilters.emplace("{[a{{t",
+                     [](JSON* json)
+                     {
+                         return JSONSplitter::ResultFromBool(json->leaveobject());
+                     });
+
     mFilters.emplace("{[a{\"ou",
                      [this](JSON* json)
                      {

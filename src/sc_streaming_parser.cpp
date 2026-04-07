@@ -88,6 +88,7 @@ void ScStreamingParser::init()
                          json->storeobject(&jsonSid);
 
                          mIsSelfOriginating =
+                             jsonSid.size() == sizeof(mClient.sessionid) &&
                              !memcmp(jsonSid.data(), mClient.sessionid, sizeof(mClient.sessionid));
 
                          return JSONSplitter::CallbackResult::SUCCESS;
