@@ -6747,6 +6747,39 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
                           options:(MEGAUploadOptions *)options;
 
 /**
+ * @brief Upload a file or a folder, specifying the parent by handle.
+ *
+ * Identical to the MEGANode overload, but accepts a parent handle directly,
+ * avoiding the need to call [MEGASdk nodeForHandle:] first.
+ *
+ * @param localPath Local path of the file or folder to upload.
+ * @param parentHandle Handle of the parent node where the file/folder will be created.
+ * @param cancelToken MEGACancelToken used to cancel the upload process safely.
+ * @param options Optional upload customization parameters (can be nil for default behavior).
+ * @param delegate Optional MEGATransferDelegate to track this transfer.
+ */
+- (void)startUploadWithLocalPath:(NSString *)localPath
+                    parentHandle:(uint64_t)parentHandle
+                     cancelToken:(nullable MEGACancelToken *)cancelToken
+                         options:(MEGAUploadOptions *)options
+                        delegate:(id<MEGATransferDelegate>)delegate;
+
+/**
+ * @brief Upload a file or a folder, specifying the parent by handle.
+ *
+ * See startUploadWithLocalPath:parentHandle:cancelToken:options:delegate: for full documentation.
+ *
+ * @param localPath Local path of the file or folder to upload.
+ * @param parentHandle Handle of the parent node where the file/folder will be created.
+ * @param cancelToken MEGACancelToken used to cancel the upload process safely.
+ * @param options Optional upload customization parameters (can be nil for default behavior).
+ */
+- (void)startUploadWithLocalPath:(NSString *)localPath
+                    parentHandle:(uint64_t)parentHandle
+                     cancelToken:(nullable MEGACancelToken *)cancelToken
+                         options:(MEGAUploadOptions *)options;
+
+/**
  * @brief Download a file or a folder from MEGA, saving custom app data during the transfer
  *
  * If the status of the business account is expired, onTransferFinish will be called with the error

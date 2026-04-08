@@ -10209,7 +10209,7 @@ void MegaApiImpl::abortCurrentScheduledCopy(int tag, MegaRequestListener *listen
 }
 
 MegaTransferPrivate* MegaApiImpl::createUploadTransfer(const LocalPath& localPath,
-                                                       MegaNode* parent,
+                                                       MegaHandle parentHandle,
                                                        const MegaUploadOptionsPrivate& options,
                                                        CancelToken cancelToken,
                                                        MegaTransferListener* listener,
@@ -10232,9 +10232,9 @@ MegaTransferPrivate* MegaApiImpl::createUploadTransfer(const LocalPath& localPat
         transfer->setLocalPath(localPath);
     }
 
-    if (parent)
+    if (parentHandle != INVALID_HANDLE)
     {
-        transfer->setParentHandle(parent->getHandle());
+        transfer->setParentHandle(parentHandle);
     }
 
     if (targetUser)
@@ -10309,7 +10309,7 @@ MegaTransferPrivate* MegaApiImpl::createUploadTransfer(const LocalPath& localPat
 }
 
 void MegaApiImpl::startUpload(const std::string localPath,
-                              MegaNode* parent,
+                              MegaHandle parentHandle,
                               CancelToken cancelToken,
                               const MegaUploadOptionsPrivate& options,
                               MegaTransferListener* listener)
@@ -10323,7 +10323,7 @@ void MegaApiImpl::startUpload(const std::string localPath,
     const PitagTrigger pitagTrigger = pitagTriggerFromChar(options.mPublicOptions.pitagTrigger);
     const PitagTarget pitagTarget = pitagTargetFromChar(options.mPublicOptions.pitagTarget);
     MegaTransferPrivate* transfer =
-        createUploadTransfer(path, parent, options, cancelToken, listener);
+        createUploadTransfer(path, parentHandle, options, cancelToken, listener);
 
     const auto nodeType =
         (transfer->fingerprint_filetype == FILENODE) ? PitagNodeType::File : PitagNodeType::Folder;
@@ -10353,7 +10353,7 @@ void MegaApiImpl::startUploadForSupport(const char* localPath, bool isSourceFile
     options.mTargetUser = MegaClient::SUPPORT_USER_HANDLE;
 
     MegaTransferPrivate* transfer =
-        createUploadTransfer(path, nullptr, options, CancelToken(), listener);
+        createUploadTransfer(path, INVALID_HANDLE, options, CancelToken(), listener);
 
     transferQueue.push(transfer);
     waiter->notify();
@@ -10562,7 +10562,11 @@ void MegaApiImpl::retryTransfer(MegaTransfer *transfer, MegaTransferListener *li
 
         const char* transferPath = t->getPath();
         const std::string normalizedPath = transferPath ? transferPath : "";
-        this->startUpload(normalizedPath, parent, t->accessCancelToken(), options, listener);
+        this->startUpload(normalizedPath,
+                          parent ? parent->getHandle() : INVALID_HANDLE,
+                          t->accessCancelToken(),
+                          options,
+                          listener);
 
         delete parent;
     }
@@ -31832,13 +31836,14 @@ bool MegaFolderUploadController::genUploadTransfersForFiles(Tree& tree, Transfer
         subOptions.mPublicOptions.appData = transfer->getAppData();
         subOptions.mFsType = tree.fsType;
 
-        MegaTransferPrivate* subTransfer =
-            megaApi->createUploadTransfer(localpath.lp,
-                                          tree.megaNode.get(),
-                                          subOptions,
-                                          transfer->accessCancelToken(),
-                                          this,
-                                          &localpath.fp);
+        MegaTransferPrivate* subTransfer = megaApi->createUploadTransfer(
+            localpath.lp,
+            tree.megaNode ? tree.megaNode->getHandle() : INVALID_HANDLE,
+            subOptions,
+            transfer->accessCancelToken(),
+            this,
+            &localpath.fp);
+
         Pitag pitag{PitagPurpose::Upload,
                     transfer->getPitag().trigger,
                     PitagNodeType::Folder,
@@ -32577,7 +32582,7 @@ void MegaScheduledCopyController::onFolderAvailable(MegaHandle handle)
 
                         const std::string childPathStr = childPath.toPath(false);
                         megaApi->startUpload(childPathStr,
-                                             parent,
+                                             parent ? parent->getHandle() : INVALID_HANDLE,
                                              CancelToken(),
                                              uploadOptions,
                                              this);
@@ -36156,7 +36161,7 @@ int MegaHTTPServer::onMessageComplete(http_parser *parser)
             uploadOptions.mFsType = fsType;
 
             httpctx->megaApi->startUpload(httpctx->tmpFileName,
-                                          newParentNode,
+                                          newParentNode->getHandle(),
                                           CancelToken(),
                                           uploadOptions,
                                           httpctx);
@@ -38924,7 +38929,7 @@ void MegaFTPDataServer::processReceivedData(MegaTCPContext *tcpctx, ssize_t nrea
                 uploadOptions.mFsType = fsType;
 
                 ftpdatactx->megaApi->startUpload(ftpdatactx->tmpFileName,
-                                                 newParentNode.get(),
+                                                 newParentNode->getHandle(),
                                                  CancelToken(),
                                                  uploadOptions,
                                                  fds->controlftpctx);

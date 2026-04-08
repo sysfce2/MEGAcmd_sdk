@@ -3771,7 +3771,7 @@ void MegaApi::startUpload(const char *localPath, MegaNode *parent, const char *f
 
     const std::string normalizedLocalPath = localPath ? localPath : "";
     pImpl->startUpload(normalizedLocalPath,
-                       parent,
+                       parent ? parent->getHandle() : INVALID_HANDLE,
                        convertToCancelToken(cancelToken),
                        options,
                        listener);
@@ -3790,7 +3790,11 @@ void MegaApi::startUploadForChat(const char *localPath, MegaNode *parent, const 
     options.mForceNewUpload = true;
 
     const std::string normalizedLocalPath = localPath ? localPath : "";
-    pImpl->startUpload(normalizedLocalPath, parent, CancelToken(), options, listener);
+    pImpl->startUpload(normalizedLocalPath,
+                       parent ? parent->getHandle() : INVALID_HANDLE,
+                       CancelToken(),
+                       options,
+                       listener);
 }
 
 void MegaApi::startUpload(const std::string& localPath,
@@ -3812,7 +3816,32 @@ void MegaApi::startUpload(const std::string& localPath,
     }
 
     pImpl->startUpload(localPath,
-                       parent,
+                       parent ? parent->getHandle() : INVALID_HANDLE,
+                       convertToCancelToken(cancelToken),
+                       localOptionsPrivate,
+                       listener);
+}
+
+void MegaApi::startUploadByHandle(const std::string& localPath,
+                                  MegaHandle parentHandle,
+                                  MegaCancelToken* cancelToken,
+                                  const MegaUploadOptions* options,
+                                  MegaTransferListener* listener)
+{
+    MegaApiImpl::MegaUploadOptionsPrivate localOptionsPrivate;
+    if (options)
+    {
+        localOptionsPrivate.mPublicOptions = *options;
+    }
+
+    if (localOptionsPrivate.mPublicOptions.isChatUpload)
+    {
+        localOptionsPrivate.mPublicOptions.startFirst = true;
+        localOptionsPrivate.mForceNewUpload = true;
+    }
+
+    pImpl->startUpload(localPath,
+                       parentHandle,
                        convertToCancelToken(cancelToken),
                        localOptionsPrivate,
                        listener);

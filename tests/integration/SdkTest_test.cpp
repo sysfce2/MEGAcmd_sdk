@@ -4630,6 +4630,51 @@ TEST_F(SdkTest, SdkTestTransfers)
     delete n5;
 }
 
+/**
+ * @brief TEST_F SdkTestStartUploadByHandle
+ *
+ * Upload a file using the parent handle overload.
+ *
+ * - Create a local file
+ * - Upload the file with startUploadByHandle
+ * - Verify the uploaded node and its parent handle
+ * - Remove the uploaded node
+ */
+TEST_F(SdkTest, SdkTestStartUploadByHandle)
+{
+    LOG_info << "___TEST startUploadByHandle___";
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
+
+    auto rootNode = std::unique_ptr<MegaNode>{megaApi[0]->getRootNode()};
+    ASSERT_NE(rootNode, nullptr) << "Cannot get root node";
+
+    const std::string localPath = "SdkTestStartUploadByHandle.txt";
+    ASSERT_TRUE(createFile(localPath, false, "upload-by-handle"))
+        << "Couldn't create " << localPath;
+
+    TransferTracker tracker(megaApi[0].get());
+    MegaUploadOptions uploadOptions;
+    uploadOptions.mtime = ::mega::MegaApi::INVALID_CUSTOM_MOD_TIME;
+
+    megaApi[0]->startUploadByHandle(localPath,
+                                    rootNode->getHandle(),
+                                    nullptr,
+                                    &uploadOptions,
+                                    &tracker);
+
+    ASSERT_EQ(API_OK, tracker.waitForResult()) << "Cannot upload file by handle";
+    ASSERT_NE(tracker.resultNodeHandle, ::mega::INVALID_HANDLE)
+        << "Upload by handle returned invalid node handle";
+
+    auto uploadedNode =
+        std::unique_ptr<MegaNode>{megaApi[0]->getNodeByHandle(tracker.resultNodeHandle)};
+    ASSERT_NE(uploadedNode, nullptr) << "Cannot retrieve uploaded node by handle";
+    EXPECT_STREQ(localPath.c_str(), uploadedNode->getName());
+    EXPECT_EQ(rootNode->getHandle(), uploadedNode->getParentHandle());
+
+    EXPECT_EQ(API_OK, synchronousRemove(0, uploadedNode.get())) << "Cannot remove uploaded node";
+    deleteFile(localPath);
+}
 
 /**
  * @brief TEST_F SdkTestUndelete
