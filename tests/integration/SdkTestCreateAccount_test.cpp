@@ -50,7 +50,7 @@ std::string getLinkFromMailbox(const std::string& exe, // Python
 
         // get time interval to look for emails, add some seconds to account for delays related to
         // the python script call
-        constexpr seconds safetyDelay = 5s;
+        constexpr seconds safetyDelay = 30s;
         const auto attemptTime = steady_clock::now();
         seconds timeSinceEmail = duration_cast<seconds>(attemptTime - timeOfEmail) + safetyDelay;
         // Run Python script

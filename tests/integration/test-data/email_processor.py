@@ -7,6 +7,7 @@ SCRIPT_EXECUTION_TIME = time.time()
 import email
 import imaplib
 import os
+import re
 import sys
 
 
@@ -32,12 +33,14 @@ class EmailProcessor:
             if not text[1]:
                 continue
             for line in text[1].splitlines():
-                if self.debug: 
+                if self.debug:
                     if line.startswith('https://'):
                         print("line:" + line)
                 if line.startswith('https://') and ('#' + intent) in line:
                     link = line.strip()
                     break
+            if link:
+                break
         self.mail.close()
         self.mail.logout()
         return link
@@ -60,7 +63,7 @@ class EmailProcessor:
     def process_email(self, ref_time, emailID, delta=360.):
         """Process each piece of an email to find the body and subject"""
         # Get email data from the ID.
-        _, data = self.mail.fetch(emailID, "(RFC822)")
+        _, data = self.mail.fetch(emailID, "(INTERNALDATE RFC822)")
 
         for part in data:
             # Look for a tuple. It will contain the email body. We can ignore the rest.
@@ -75,18 +78,16 @@ class EmailProcessor:
                     subject = subject.decode(encoding)
                 if self.debug: print("Subject: " + subject)
 
-                # Discard if it is outdated
-                dt = 0
-                for item in msg['DKIM-Signature'].split(';'):
-                    if 't=' in item:
-                        dt = item.strip()[2:]
-                        break
-                else:
-                    assert dt, 'timestamp not found from email header'
-                elapsed = ref_time - float(dt)
+                # Discard if it is outdated. Prefer IMAP INTERNALDATE (mailbox delivery time)
+                # over DKIM's timestamp, since DKIM time can predate the test action and make
+                # newly delivered emails look stale.
+                dt = self.get_message_timestamp(part[0], msg)
+                if dt is None:
+                    return None
+
+                elapsed = ref_time - dt
                 if elapsed > delta:
-                    # Emails are sorted by time so no need to continue processing
-                    break
+                    return None
 
                 # Get the plain text from the body
                 text = None
@@ -98,6 +99,27 @@ class EmailProcessor:
 
                 if subject and text:
                     return {subject: [emailID, text]}
+        return None
+
+    def get_message_timestamp(self, fetch_metadata, msg):
+        """Get message timestamp, preferring IMAP INTERNALDATE over email headers."""
+        if isinstance(fetch_metadata, bytes):
+            match = re.search(br'INTERNALDATE "([^"]+)"', fetch_metadata)
+            if match:
+                parsed = email.utils.parsedate_tz(match.group(1).decode('ascii'))
+                if parsed is not None:
+                    return email.utils.mktime_tz(parsed)
+
+        dkim_signature = msg.get('DKIM-Signature')
+        if dkim_signature:
+            for item in dkim_signature.split(';'):
+                item = item.strip()
+                if item.startswith('t='):
+                    try:
+                        return float(item[2:])
+                    except ValueError:
+                        break
+
         return None
 
 if len(sys.argv) == 1 or "--help" in sys.argv[1:] or (os.name == "nt" and "/?" in sys.argv[1:]):
