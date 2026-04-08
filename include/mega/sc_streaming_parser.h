@@ -29,6 +29,8 @@ namespace mega
 
 class MegaClient;
 
+#define MIN_COMMIT_INTERVAL 3
+
 // Class to process server-client packets in streaming using JSONSplitter.
 class MEGA_API ScStreamingParser
 {
@@ -52,11 +54,12 @@ private:
 
     handle mInterimSn;
     bool mNeedToPurge;
+    BackoffTimer mBt;
 
     TreeFilters mTreeFilters;
 
 public:
-    ScStreamingParser(MegaClient& client);
+    ScStreamingParser(MegaClient& client, PrnGen& rng);
 
     void init();
     m_off_t process(const char* data);

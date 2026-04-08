@@ -1981,7 +1981,7 @@ MegaClient::MegaClient(MegaApp* a,
     btworkinglock(rng),
     btreqstat(rng),
     btsc(rng),
-    scStreamingParser(*this),
+    scStreamingParser(*this, rng),
     btpfa(rng),
     fsaccess(new FSACCESS_CLASS()),
     dbaccess(d),
@@ -5356,10 +5356,10 @@ void MegaClient::sc_storeSn(JSON& json)
     // At this point no CurrentSeqtag should be seen. mCurrentSeqtagSeen is set true
     // when action package is processed and the seq tag matches with mCurrentSeqtag
     assert(!mCurrentSeqtagSeen);
-    sc_purge();
+    sc_purgeAndCommit();
 }
 
-void MegaClient::sc_purge()
+void MegaClient::sc_purgeAndCommit()
 {
     notifypurge();
     if (sctable)
@@ -25419,7 +25419,6 @@ void MegaClient::handleScInFailureState()
         }
 
         pendingsc.reset();
-        clearStreamingParser();
     }
 
     if (scsn.stopped())
@@ -25484,11 +25483,17 @@ void MegaClient::handleScInStreaming()
             }
             else
             {
+                // Clear the streaming parser before handling the error, because clearing
+                // may commit to the DB, which must happen before scsn is stopped.
+                clearStreamingParser();
                 handleScErrorInSuccessState();
             }
 
             [[fallthrough]];
         case REQ_FAILURE:
+            // Clear the streaming parser before handling the failure, because clearing
+            // may commit to the DB, which must happen before scsn is stopped.
+            clearStreamingParser();
             handleScInFailureState();
             break;
 
