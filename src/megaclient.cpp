@@ -18931,10 +18931,9 @@ bool MegaClient::startxfer(direction_t d, File* f, TransferDbCommitter& committe
             // Only the Transfer's own localpath field tells us the path it was uploading
 
             auto rangeCached = multi_cachedtransfers[d].equal_range(f);
-            for (auto& it = rangeCached.first; it != rangeCached.second; ++it)
+            for (auto it = rangeCached.first; it != rangeCached.second; ++it)
             {
                 assert(it->second->files.empty());
-                if (it->second->localfilename.empty()) continue;
 
                 if (d == PUT)
                 {
@@ -18968,25 +18967,34 @@ bool MegaClient::startxfer(direction_t d, File* f, TransferDbCommitter& committe
                 // got suspended (eg by app exit), and we are considering the File of one of the others
                 // than the actual file path that was being uploaded.
 
-                for (auto& it = rangeCached.first; it != rangeCached.second; ++it)
+                for (auto it = rangeCached.first; it != rangeCached.second; ++it)
                 {
                     assert(it->second->files.empty());
-                    if (it->second->localfilename.empty()) continue;
 
-                    string ext1, ext2;
-                    if (fsaccess->getextension(f->getLocalname(), ext1) &&
-                        fsaccess->getextension(it->second->localfilename, ext2))
+                    if (!it->second->localfilename.empty())
                     {
-                        if (!ext1.empty() && ext1[0] == '.') ext1.erase(0, 1);
-                        if (!ext2.empty() && ext2[0] == '.') ext2.erase(0, 1);
-
-                        if (treatAsIfFileDataEqual(*f, ext1,
-                                                   *it->first, ext2))
+                        string ext1, ext2;
+                        if (fsaccess->getextension(f->getLocalname(), ext1) &&
+                            fsaccess->getextension(it->second->localfilename, ext2))
                         {
-                            t = it->second;
-                            multi_cachedtransfers[d].erase(it);
-                            break;
+                            if (!ext1.empty() && ext1[0] == '.')
+                                ext1.erase(0, 1);
+                            if (!ext2.empty() && ext2[0] == '.')
+                                ext2.erase(0, 1);
+
+                            if (treatAsIfFileDataEqual(*f, ext1, *it->first, ext2))
+                            {
+                                t = it->second;
+                                multi_cachedtransfers[d].erase(it);
+                                break;
+                            }
                         }
+                    }
+                    else
+                    {
+                        t = it->second;
+                        multi_cachedtransfers[d].erase(it);
+                        break;
                     }
                 }
             }
@@ -19054,6 +19062,10 @@ bool MegaClient::startxfer(direction_t d, File* f, TransferDbCommitter& committe
             {
                 t = new Transfer(this, d);
                 *(FileFingerprint*)t = *(FileFingerprint*)f;
+                if (d == GET)
+                {
+                    t->downloadFileHandle = f->h;
+                }
             }
 
             t->skipserialization = donotpersist;
