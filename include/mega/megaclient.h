@@ -493,6 +493,13 @@ private:
 
     // true if the credentials of this user require verification
     bool verificationRequired(handle userHandle);
+
+    // Helper to send Pending Keys to the sharees
+    bool sendPendingKey(const handle nodehandle, User* u);
+
+    // Helper to send Pending Keys to the contacts involved in a nested share.
+    void propagateKeysForNestedShares(handle promotedNodeHandle,
+                                      const std::vector<std::string>& newShareeUids);
 };
 
 struct DynamicMessageNotification

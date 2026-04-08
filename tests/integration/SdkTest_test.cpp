@@ -7199,32 +7199,44 @@ TEST_F(SdkTest, SdkTestShareKeys)
     ASSERT_EQ(1, nl1->size());
     ASSERT_EQ(1, nl2->size());
 
-    MegaNode* receivedShareNodeB = nl1->get(0);
     MegaNode* receivedShareNodeC = nl2->get(0);
 
     ASSERT_NE(createFolder(2, "folderByC1", receivedShareNodeC), UNDEF);
     ASSERT_NE(createFolder(2, "folderByC2", receivedShareNodeC), UNDEF);
 
-    ASSERT_TRUE(WaitFor([this, &subFolderA]() { unique_ptr<MegaNodeList> aView(megaApi[0]->getChildren(subFolderA.get()));
-                                   return aView->size() == 2; }, 60000));
+    // Wait for the inshare nodes to be available and decrypted in A
+    ASSERT_TRUE(WaitFor(
+        [this, &subFolderA]()
+        {
+            unique_ptr<MegaNodeList> aView(megaApi[0]->getChildren(subFolderA.get()));
+            return aView->size() == 2 && aView->get(0)->isNodeKeyDecrypted() &&
+                   aView->get(1)->isNodeKeyDecrypted();
+        },
+        60000));
 
-    WaitMillisec(10000);  // make it shorter once we do actually get the keys (seems to need a bug fix)
-
-    // can A see the added folders?
-
+    // can A see the added folders by C?
     unique_ptr<MegaNodeList> aView(megaApi[0]->getChildren(subFolderA.get()));
     ASSERT_EQ(2, aView->size());
     ASSERT_STREQ(aView->get(0)->getName(), "folderByC1");
     ASSERT_STREQ(aView->get(1)->getName(), "folderByC2");
 
-    // Can B see the added folders?
-    unique_ptr<MegaNodeList> bView(megaApi[1]->getChildren(receivedShareNodeB));
-    ASSERT_EQ(1, bView->size());
-    ASSERT_STREQ(bView->get(0)->getName(), "sub-folder-A");
-    unique_ptr<MegaNodeList> bView2(megaApi[1]->getChildren(bView->get(0)));
+    // Wait for the inshare nodes to be available and decrypted in B
+    unique_ptr<MegaNode> subFodlerAinB(megaApi[1]->getNodeByHandle(subFolderA->getHandle()));
+    ASSERT_TRUE(subFodlerAinB);
+    ASSERT_TRUE(WaitFor(
+        [this, &subFodlerAinB]()
+        {
+            unique_ptr<MegaNodeList> aView(megaApi[1]->getChildren(subFodlerAinB.get()));
+            return aView->size() == 2 && aView->get(0)->isNodeKeyDecrypted() &&
+                   aView->get(1)->isNodeKeyDecrypted();
+        },
+        60000));
+
+    // Can B see the added folders by C?
+    unique_ptr<MegaNodeList> bView2(megaApi[1]->getChildren(subFodlerAinB.get()));
     ASSERT_EQ(2, bView2->size());
-    ASSERT_STREQ(bView2->get(0)->getName(), "NO_KEY");  // TODO: This is technically not correct but a current side effect of avoiding going back to the servers frequently - to be fixed soon.  For now choose the value that matches production
-    ASSERT_STREQ(bView2->get(1)->getName(), "NO_KEY");
+    ASSERT_STREQ(bView2->get(0)->getName(), "folderByC1");
+    ASSERT_STREQ(bView2->get(1)->getName(), "folderByC2");
 }
 
 string localpathToUtf8Leaf(const LocalPath& itemlocalname)
