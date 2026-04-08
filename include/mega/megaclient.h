@@ -1783,14 +1783,6 @@ private:
      * This is a switch for parsing action aackets from SC channel
      * if true, use the ScStreamingParser to handle action packets
      * if false, use original mode, which will call procsc()
-     *
-     * TODO(Carlos & Darren):
-     * Before streaming goes into production, we need following changes:
-     * 1. Implement the switch between two modes
-     * 2. Implement the 'isn' tag for commiting to database as memory changes
-     * 3. Optimize the 't' tag for huge action packet
-     * After these changes, we can enable the streaming parsing by setting this to true
-     * It needs to be changed to false before merging to the develop branch
      */
     bool mStreamingEnabled = false;
 

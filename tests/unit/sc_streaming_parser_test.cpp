@@ -206,7 +206,7 @@ TEST_F(ScStreamingParserTest, ProcessWithSessionIdPresent)
     scStreamingParser->clear();
 
     // Self-originated
-    sessionId = client->sessionid;
+    sessionId = string(client->sessionid, sizeof(client->sessionid));
     json = json1 + sessionId + json2;
     testFinishedProcess(scStreamingParser,
                         *client.get(),
@@ -531,14 +531,27 @@ TEST_F(ScStreamingParserTest, ProcessPacketTreeMixOthers)
 {
     initNodes();
 
-    std::string jsonCreate =
+    std::string json =
         R"({"a":[{"a":"t","st":"!G(<Cq+","t":{"f":[{"h":"i4om2BrJ","t":1,"a":"k8mDAq0-TfskLMyMqcxssQ","k":"vN8A0kvxmC0:cXtlV5RG0QHpBxl-sZWQxA","p":"Ll5VkSJZ","ts":1770364711,"u":"vN8A0kvxmC0","i":0}]},"ou":"vN8A0kvxmC0"}, {"a":"s2","st":"!?>Qzzr","n":"hH4SgJJZ","o":"UH4jcqAYP8o","ok":"AAAAAAAAAAAAAAAAAAAAAA","ha":"AAAAAAAAAAAAAAAAAAAAAA","u":"JoPrmG9jv98","r":1,"ts":1761823710,"p":"ShhP2ZnftRQ","op":1}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"JcnE8wc8Xz0"})";
 
     scStreamingParser->init();
 
     testFinishedProcess(scStreamingParser,
                         *client.get(),
-                        jsonCreate,
+                        json,
+                        "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
+                        "JcnE8wc8Xz0");
+
+    // Clear for next process
+    scStreamingParser->clear();
+
+    // Verify "t" packet without "ou" field
+    std::string jsonWithoutOu =
+        R"({"a":[{"a":"t","st":"!G(<Cq+","t":{"f":[{"h":"r14EgLRY","t":1,"a":"k8mDAq0-TfskLMyMqcxssQ","k":"vN8A0kvxmC0:cXtlV5RG0QHpBxl-sZWQxA","p":"Ll5VkSJZ","ts":1770364711,"u":"vN8A0kvxmC0","i":0}]}}, {"a":"s2","st":"!?>Qzzr","n":"hH4SgJJZ","o":"UH4jcqAYP8o","ok":"AAAAAAAAAAAAAAAAAAAAAA","ha":"AAAAAAAAAAAAAAAAAAAAAA","u":"JoPrmG9jv98","r":1,"ts":1761823710,"p":"ShhP2ZnftRQ","op":1}],"w":"https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ","sn":"JcnE8wc8Xz0"})";
+
+    testFinishedProcess(scStreamingParser,
+                        *client.get(),
+                        jsonWithoutOu,
                         "https://g.api.mega.co.nz/wsc/WS_LMPJFp8VlKndvCVoSBQ",
                         "JcnE8wc8Xz0");
 }
