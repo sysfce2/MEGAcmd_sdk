@@ -21814,10 +21814,11 @@ TEST_F(SdkTest, SdkTestVPN)
 /**
  * @brief Test checks deleting user attributes
  * Steps:
- *  - Set firstname attribute to make sure it exists
+ *  - Set firstname and lastname attribute to make sure they are exists
  *  - Delete firstname attribute
  *  - Get firstname attribute to check it does not exist anymore
  *  - Try to delete firstname attribute to get ENOENT response
+ *  - Delete lastname attributes to clean up the account for next tests
  */
 TEST_F(SdkTest, SdkDeleteUserAttribute)
 {
@@ -21826,11 +21827,13 @@ TEST_F(SdkTest, SdkDeleteUserAttribute)
     string firstname = "testingName";
     string lastname = "lastname";
     /*
-    1) If at least one of firstname/lastname exists and is not null, then return -9.
+    getUserAttribute:
+    1) If get firstname, lastname exists and is not null or get lastname, firstname exists and is
+not null, API server return -9.
     2) If neither exist or one is missing and the other is null, then:
-        a. If fetching lastname, return empty string
-        b. If fetching firstname, attempt to populate from signup data, if still not exists, set to
-empty string
+        a. If fetching lastname, API server return empty string
+        b. If fetching firstname, API server attempt to populate from signup data, if still not
+exists, API server set to empty string
     */
     ASSERT_EQ(API_OK,
               synchronousSetUserAttribute(0, MegaApi::USER_ATTR_FIRSTNAME, firstname.c_str()));
@@ -21847,8 +21850,9 @@ empty string
     megaApi[0]->deleteUserAttribute(MegaApi::USER_ATTR_FIRSTNAME, &secondDeleteAttributeTracker);
     ASSERT_EQ(API_ENOENT, secondDeleteAttributeTracker.waitForResult());
 
-    ASSERT_EQ(API_OK,
-              synchronousSetUserAttribute(0, MegaApi::USER_ATTR_FIRSTNAME, firstname.c_str()));
+    RequestTracker lastnameDeleteAttributeTracker(megaApi[0].get());
+    megaApi[0]->deleteUserAttribute(MegaApi::USER_ATTR_LASTNAME, &lastnameDeleteAttributeTracker);
+    ASSERT_EQ(API_OK, lastnameDeleteAttributeTracker.waitForResult());
 }
 
 TEST_F(SdkTest, GetFeaturePlans)
