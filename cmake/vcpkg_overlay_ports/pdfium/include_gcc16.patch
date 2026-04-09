@@ -1,0 +1,12 @@
+diff --git a/core/fxcodec/jbig2/JBig2_DocumentContext.h b/core/fxcodec/jbig2/JBig2_DocumentContext.h
+index b2a44c5..0543b7a 100644
+--- a/core/fxcodec/jbig2/JBig2_DocumentContext.h
++++ b/core/fxcodec/jbig2/JBig2_DocumentContext.h
+@@ -10,6 +10,7 @@
+ #include <list>
+ #include <memory>
+ #include <utility>
++#include <cstdint>
+ 
+ class CJBig2_SymbolDict;
+ 
