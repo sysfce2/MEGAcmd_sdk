@@ -34,6 +34,7 @@ vcpkg_from_git(
     PATCHES
         gcc_parentheses_init.patch # gcc9, no aggregate initialization with parentheses in C++20.
         win-compilation-v142.patch # Compiler fails auto type deduction in v142 platform
+        include_gcc16.patch # gcc16 requires to inclde cstdint
 )
 
 message(STATUS "Working on submodules and other dependencies...")
