@@ -38,7 +38,7 @@ protected:
     {
         app = std::make_shared<MegaApp>();
         client = mt::makeClient(*app);
-        scStreamingParser = std::make_shared<ScStreamingParser>(*client);
+        scStreamingParser = std::make_shared<ScStreamingParser>(*client, client->rng);
     }
 
     void TearDown() override
