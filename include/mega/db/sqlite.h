@@ -81,7 +81,12 @@ public:
 
     uint64_t getNumberOfChildren(NodeHandle parentHandle) override;
     // If a cancelFlag is passed, it must be kept alive until this method returns.
-    bool getChildren(const mega::NodeSearchFilter& filter, int order, std::vector<std::pair<NodeHandle, NodeSerialized>>& children, CancelToken cancelFlag, const NodeSearchPage& page) override;
+    bool getChildren(const mega::NodeSearchFilter& filter,
+                     int order,
+                     std::vector<std::pair<NodeHandle, NodeSerialized>>& children,
+                     CancelToken cancelFlag,
+                     const NodeSearchPage& page,
+                     const bool skipVersions = true) override;
 
     bool listChildNodesLexicographically(
         const handle parenthandle,

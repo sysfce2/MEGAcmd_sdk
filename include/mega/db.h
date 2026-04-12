@@ -157,7 +157,12 @@ public:
     virtual bool getNodesByOrigFingerprint(const std::string& fingerprint, std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes) = 0;
 
     virtual uint64_t getNumberOfChildren(NodeHandle parentHandle) = 0;
-    virtual bool getChildren(const NodeSearchFilter& filter, int order, std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes, CancelToken cancelFlag, const NodeSearchPage& page) = 0;
+    virtual bool getChildren(const NodeSearchFilter& filter,
+                             int order,
+                             std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes,
+                             CancelToken cancelFlag,
+                             const NodeSearchPage& page,
+                             const bool skipVersions = true) = 0;
     virtual bool listChildNodesLexicographically(
         const handle parenthandle,
         std::vector<std::pair<NodeHandle, NodeSerialized>>& children,
