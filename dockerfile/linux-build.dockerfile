@@ -8,15 +8,13 @@
 # - archlinux
 # - almalinux:9
 # - centos:stream9 (or quay.io/centos/centos:stream9)
-# - opensuse/leap:15.6
 # - opensuse/leap:16.0
 # - opensuse/tumbleweed
 # - ubuntu:22.04
 # - ubuntu:24.04
-# - ubuntu:25.04
 # - ubuntu:25.10
-# - fedora:42
 # - fedora:43
+# - fedora:44
 #
 # Where <ARCH> is one of the following:
 # - x64 (default)
@@ -27,7 +25,7 @@
 # docker run -v /path/to/sdk:/mega/sdk sdk-linux-build
 
 # Define global args only visible to "FROM" directive(s)
-ARG DISTRO=ubuntu:22.04
+ARG DISTRO=ubuntu:24.04
 
 # Map centos:stream* to quay.io namespace at pull time.
 FROM ${DISTRO/*centos:stream/quay.io/centos/centos:stream}
@@ -64,26 +62,13 @@ case "${DISTRO}" in
         fi
 
         PACKAGES="${PACKAGES} automake awk gcc-c++ cmake libtool make"
-        if [ "$DISTRO" = "opensuse/leap:15.6" ]; then
-            PACKAGES="${PACKAGES} python311"
-        elif [ "$DISTRO" = "opensuse/leap:16.0" ] || [ "$DISTRO" = "opensuse/tumbleweed" ]; then
+        if [ "$DISTRO" = "opensuse/leap:16.0" ] || [ "$DISTRO" = "opensuse/tumbleweed" ]; then
             PACKAGES="${PACKAGES} python313"
-        fi
- 
-        if [ "$DISTRO" = "opensuse/leap:15.6" ]; then
-            PACKAGES="${PACKAGES} gcc14 gcc14-c++"
-            SDK_BUILD_CC="gcc-14"
-            SDK_BUILD_CXX="g++-14"
-            SDK_BUILD_CMAKE_ARGS="-DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14"
         fi
 
         zypper install -y --force-resolution ${PACKAGES}
         
-        if [ "$DISTRO" = "opensuse/leap:15.6" ]; then
-            mkdir -p /mega/python311
-            ln -sf /usr/bin/python3.11 /mega/python311/python3
-            SDK_BUILD_PATH_PREFIX="/mega/python311"
-        elif [ "$DISTRO" = "opensuse/leap:16.0" ] || [ "$DISTRO" = "opensuse/tumbleweed" ]; then
+        if [ "$DISTRO" = "opensuse/leap:16.0" ] || [ "$DISTRO" = "opensuse/tumbleweed" ]; then
             mkdir -p /mega/python313
             ln -sf /usr/bin/python3.13 /mega/python313/python3
             SDK_BUILD_PATH_PREFIX="/mega/python313"
