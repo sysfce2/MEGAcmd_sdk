@@ -1901,7 +1901,7 @@ public:
 
     // server-client command processing
     void sc_storeSn(JSON& json);
-    void sc_purge();
+    void sc_purgeAndCommit();
     void sc_procEoo(std::unique_lock<recursive_mutex>& nodeTreeIsChanging, bool originalAC);
     // process an action packet
     bool sc_procActionPacket(JSON& json, std::shared_ptr<Node>& lastAPDeletedNode);

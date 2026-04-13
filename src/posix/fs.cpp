@@ -2315,10 +2315,7 @@ static std::string deviceOf(const std::string& database,
 static std::string deviceOf(const std::string& path)
 {
     // Which mount databases should we search?
-    static const std::vector<std::string> databases = {
-        "/proc/mounts",
-        "/etc/mtab"
-    }; // databases
+    static const char* const databases[] = {"/proc/mounts", "/etc/mtab"}; // databases
 
     // Try and determine which device contains path.
     for (const auto& database : databases)

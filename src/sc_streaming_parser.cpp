@@ -27,8 +27,10 @@
 namespace mega
 {
 
-ScStreamingParser::ScStreamingParser(MegaClient& client):
+ScStreamingParser::ScStreamingParser(MegaClient& client, PrnGen& rng):
     mClient(client),
+    mNeedToPurge(false),
+    mBt(rng),
     mTreeFilters(client)
 {
     clear();
@@ -194,6 +196,8 @@ void ScStreamingParser::init()
                      [this](JSON* json)
                      {
                          mClient.sc_storeSn(*json);
+                         mNeedToPurge = false;
+                         mBt.backoff(MIN_COMMIT_INTERVAL);
                          return JSONSplitter::CallbackResult::SUCCESS;
                      });
 
@@ -212,10 +216,13 @@ void ScStreamingParser::init()
                      {
                          mCcst.reset();
 
-                         if (mNeedToPurge)
+                         WAIT_CLASS::bumpds();
+
+                         if (mNeedToPurge && mBt.armed())
                          {
-                             mClient.sc_purge();
+                             mClient.sc_purgeAndCommit();
                              mNeedToPurge = false;
+                             mBt.backoff(MIN_COMMIT_INTERVAL);
                          }
 
                          return JSONSplitter::CallbackResult::SUCCESS;
@@ -261,6 +268,14 @@ void ScStreamingParser::setLastReceived()
 
 void ScStreamingParser::clear()
 {
+    if (mNeedToPurge)
+    {
+        mClient.sc_purgeAndCommit();
+    }
+
+    mNeedToPurge = false;
+    mBt.reset();
+
     if (mTreeFilters.isStarted())
     {
         mTreeFilters.clear(mFiltersChain);
@@ -271,7 +286,6 @@ void ScStreamingParser::clear()
     mLastAPDeletedNode = nullptr;
 
     mInterimSn = UNDEF;
-    mNeedToPurge = false;
 
     clearActionPacketData();
 
