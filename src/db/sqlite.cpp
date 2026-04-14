@@ -1954,7 +1954,8 @@ bool SqliteAccountState::getChildren(const mega::NodeSearchFilter& filter,
                                      int order,
                                      vector<pair<NodeHandle, NodeSerialized>>& children,
                                      CancelToken cancelFlag,
-                                     const NodeSearchPage& page)
+                                     const NodeSearchPage& page,
+                                     const bool skipVersions)
 {
     if (!db)
         return false;
@@ -1975,6 +1976,7 @@ bool SqliteAccountState::getChildren(const mega::NodeSearchFilter& filter,
     static const QueryTagId idPageSize{2};
     static const QueryTagId idPageOff{3};
     static const QueryTagId idFilter{4};
+    static const QueryTagId idVerFlag{5};
     if (!stmt)
     {
         // Inherited sensitivity is not a concern here. When filtering out sensitive nodes, the
@@ -1987,9 +1989,10 @@ bool SqliteAccountState::getChildren(const mega::NodeSearchFilter& filter,
         const std::string sqlQuery =
             "SELECT nodehandle, counter, node "s +
             "FROM nodes "
-            "WHERE (parenthandle = " + idParentHand + ") " // Versions aren't taken in consideration
-             "AND matchFilter(" + idFilter + ", flags, type, ctime, mtime, mimetypeVirtual, name, description, tags, fav)"
-             "ORDER BY \n" +
+            "WHERE (parenthandle = " + idParentHand + ") "
+            "AND (flags & " + idVerFlag + ") = 0 " // bound to versionFlag to skip, or 0 to include
+            "AND matchFilter(" + idFilter + ", flags, type, ctime, mtime, mimetypeVirtual, name, description, tags, fav)"
+            "ORDER BY \n" +
             OrderByClause::get(order) + " \n" +
             "LIMIT " + idPageSize + " OFFSET " + idPageOff;
         // clang-format on
@@ -2001,11 +2004,14 @@ bool SqliteAccountState::getChildren(const mega::NodeSearchFilter& filter,
 
     const sqlite3_int64 pageSize = page.size() ? static_cast<sqlite3_int64>(page.size()) : -1;
     NodeSearchFilter filterCopy = filter;
+    constexpr int64_t versionFlag = 1 << Node::FLAGS_IS_VERSION;
+    const int64_t verMask = skipVersions ? versionFlag : 0;
 
     bindPointer(sqlResult, stmt, idFilter, &filterCopy, NodeSearchFilterPtrStr);
     bindValue(sqlResult, stmt, idParentHand, filter.byParentHandle(), sqlite3_bind_int64);
     bindValue(sqlResult, stmt, idPageSize, pageSize, sqlite3_bind_int64);
     bindValue(sqlResult, stmt, idPageOff, page.startingOffset(), sqlite3_bind_int64);
+    bindValue(sqlResult, stmt, idVerFlag, verMask, sqlite3_bind_int64);
 
     if (sqlResult == SQLITE_OK)
         result = processSqlQueryNodes(stmt, children);
@@ -2382,7 +2388,8 @@ bool SqliteAccountState::searchNodes(const NodeSearchFilter& filter,
             "AS (SELECT " + columnsForNodeAndFilters + " \n"
                 "FROM nodes \n"
                 "WHERE parenthandle NOT IN (SELECT nodehandle FROM ancestors) AND "
-                + idIncShares + " != " + noShareStr + " AND share & " + idIncShares + " != 0)";
+                + idIncShares + " != " + noShareStr + " AND share & " + idIncShares + " != 0 "
+                "AND (flags & " + idVerFlag + " = 0))"; // Versions aren't taken in consideration
 
         static const std::string nodesCTE =
             "nodesCTE(" + columnsForNodeAndFilters + ") \n"
@@ -3518,14 +3525,11 @@ void SqliteAccountState::userMatchFilter(sqlite3_context* context, int argc, sql
     auto filter = static_cast<const NodeSearchFilter*>(
         sqlite3_value_pointer(argv[0], NodeSearchFilterPtrStr));
 
+    // Version filtering is handled structurally by the SQL query itself (via the
+    // skipVersions parameter on SqliteAccountState::getChildren and the idVerFlag
+    // binding in SqliteAccountState::searchNodes). userMatchFilter no longer needs
+    // to enforce it here.
     const int64_t flags = sqlite3_value_int64(argv[1]);
-    // Do not include versions
-    if (!filter->includeVersions())
-    {
-        constexpr int64_t versionFlag = 1 << Node::FLAGS_IS_VERSION;
-        if ((flags & versionFlag) != 0)
-            return;
-    }
 
     // type
     const nodetype_t type = static_cast<nodetype_t>(sqlite3_value_int(argv[2]));

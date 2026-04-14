@@ -216,16 +216,6 @@ public:
         return mExcludeSensitive != BoolFilter::disabled;
     }
 
-    void includeVersions(const bool includeVersions)
-    {
-        mIncludeVersions = includeVersions;
-    }
-
-    bool includeVersions() const
-    {
-        return mIncludeVersions;
-    }
-
     bool isValidNodeType(const nodetype_t nodeType) const;
     bool isValidCreationTime(const int64_t time) const;
     bool isValidModificationTime(const int64_t time) const;
@@ -252,7 +242,6 @@ private:
     TextPattern mTagFilter;
     bool mTagFilterContainsSeparator{false};
     bool mUseAndForTextQuery{true};
-    bool mIncludeVersions{false};
 
     static bool isDocType(const MimeType_t t);
     static bool isVisualMediaType(const MimeType_t t);
@@ -335,9 +324,7 @@ public:
     std::shared_ptr<Node> getNodeByHandle(NodeHandle handle);
 
     // read children from DB and load them in memory
-    sharedNode_list getChildren(const Node* parent,
-                                CancelToken cancelToken = CancelToken(),
-                                bool includeVersions = false);
+    sharedNode_list getChildren(const Node* parent, CancelToken cancelToken = CancelToken());
 
     sharedNode_vector getChildren(const NodeSearchFilter& filter, int order, CancelToken cancelFlag, const NodeSearchPage& page);
 
@@ -724,8 +711,7 @@ private:
 
     std::shared_ptr<Node> getNodeByHandle_internal(NodeHandle handle);
     sharedNode_list getChildren_internal(const Node* parent,
-                                         CancelToken cancelToken = CancelToken(),
-                                         bool includeVersions = false);
+                                         CancelToken cancelToken = CancelToken());
 
     sharedNode_vector getNodesByFingerprint_internal(const FileFingerprint& fingerprint,
                                                      const bool excludeMtime);

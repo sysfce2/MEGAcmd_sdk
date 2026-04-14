@@ -16120,10 +16120,8 @@ TEST_F(SdkTest, SdkUserAlerts)
  * - Remove all versions across entire account; will keep only last version
  * - Delete a version by the API when limit was reached (chain must have 100 versions)
  */
-TEST_F(SdkTest, SdkVersionManagement)
+void SdkTest::runVersionManagementSequence(std::function<void()> preDeleteInjection)
 {
-    LOG_info << "___TEST SdkVersionManagement";
-
     ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
 
     doSetFileVersionsOption(0, false); // enable versioning
@@ -16241,6 +16239,47 @@ TEST_F(SdkTest, SdkVersionManagement)
     folder2Node.reset(api->getNodeByHandle(folder2Handle));
     ASSERT_TRUE(folder2Node);
 
+    // Lambda that runs the injection callback and re-fetches node pointers
+    // from their handles (which survive session restoration). This is shared by
+    // both injection points so the logic is not duplicated.
+    // fileNode/allVersions are only re-fetched if fileHandle is still alive
+    // (it won't be after doRemoveVersion removes the head version).
+    auto runInjectionAndRefetch = [&]()
+    {
+        preDeleteInjection();
+
+        // Re-fetch folder/root node pointers from handles after session restoration.
+        // MegaNode objects are invalidated by locallogout; handles survive.
+        rootNode.reset(api->getRootNode());
+        ASSERT_TRUE(rootNode);
+        folder1Node.reset(api->getNodeByHandle(folder1Handle));
+        ASSERT_TRUE(folder1Node) << "folder1 not found after session restore";
+        folder2Node.reset(api->getNodeByHandle(folder2Handle));
+        ASSERT_TRUE(folder2Node) << "folder2 not found after session restore";
+
+        // fileHandle may have been removed by doRemoveVersion on the head version.
+        // Only re-fetch fileNode/allVersions if the handle is still alive.
+        fileNode.reset(api->getNodeByHandle(fileHandle));
+        if (fileNode)
+        {
+            allVersions.reset(api->getVersions(fileNode.get()));
+        }
+    };
+
+    // Save handle of allVersions->get(1) before any injection. After session
+    // restoration the MegaNode objects are stale, but handles persist in the DB.
+    // We need this to re-fetch versionsAfterRemoval after the second injection.
+    MegaHandle versionOneHandle = allVersions->get(1)->getHandle();
+
+    // -- INJECTION POINT 1: force slow path before deletion operations --
+    if (preDeleteInjection)
+    {
+        ASSERT_NO_FATAL_FAILURE(runInjectionAndRefetch());
+        ASSERT_TRUE(fileNode) << "versioned file not found after session restore";
+        ASSERT_EQ(allVersions->size(), verCount)
+            << "Version count mismatch after session restore (expected " << verCount << ")";
+    }
+
     //  Remove current version
     ASSERT_EQ(API_OK, doRemoveVersion(0, allVersions->get(0)));
     int verRemoved = 1;
@@ -16277,8 +16316,65 @@ TEST_F(SdkTest, SdkVersionManagement)
     //  Remove node in the middle (and all previous versions)
     ASSERT_GT(versionsAfterRemoval->size(), 2) << "Not enough versions to test further";
     middle = (versionsAfterRemoval->size() + 1) / 2;
-    ASSERT_EQ(API_OK, doDeleteNode(0, versionsAfterRemoval->get(middle)));
-    versionsAfterRemoval.reset(api->getVersions(allVersions->get(1)));
+
+    // Save the handle of the node we will delete BEFORE the injection.
+    // After injection we must NOT call getVersions() because that walks the
+    // version chain via getChildren(), which takes the slow path and sets
+    // mAllChildrenHandleLoaded=true for every visited node (AF6), re-arming
+    // the fast path and masking the bug.
+    MegaHandle deleteTargetHandle = versionsAfterRemoval->get(middle)->getHandle();
+
+    // Save handles of version nodes BELOW the delete target. After doDeleteNode,
+    // these must be removed (they are older versions). On the slow path, proctree()
+    // misses them and they persist as zombies (the bug we are detecting).
+    std::vector<MegaHandle> expectedRemovedHandles;
+    for (int i = middle + 1; i < versionsAfterRemoval->size(); ++i)
+    {
+        expectedRemovedHandles.push_back(versionsAfterRemoval->get(i)->getHandle());
+    }
+
+    // -- INJECTION POINT 2: re-force slow path immediately before doDeleteNode --
+    // The slow path is self-healing (see AF6): every getVersions() / getChildren()
+    // call between injection 1 and here has set mAllChildrenHandleLoaded=true for
+    // each visited node, re-arming the fast path. Without a second injection, the
+    // doDeleteNode below would take the fast path and the bug would not manifest.
+    if (preDeleteInjection)
+    {
+        ASSERT_NO_FATAL_FAILURE(runInjectionAndRefetch());
+    }
+
+    // Use the saved handle to get a fresh MegaNode for the delete target.
+    // This getNodeByHandle call does NOT traverse the version chain, so it
+    // does not re-arm the fast path for version children.
+    {
+        unique_ptr<MegaNode> deleteTarget(api->getNodeByHandle(deleteTargetHandle));
+        ASSERT_TRUE(deleteTarget) << "delete target not found (handle "
+                                  << Base64Str<MegaClient::NODEHANDLE>(deleteTargetHandle) << ")";
+        ASSERT_EQ(API_OK, doDeleteNode(0, deleteTarget.get()));
+    }
+
+    // Verify that version nodes below the delete target were properly removed.
+    // Before the fix, the slow-path getChildren DB query silently dropped
+    // version children, so TreeProcDel never visited them during proctree()
+    // traversal and they persisted as zombies.
+    for (size_t i = 0; i < expectedRemovedHandles.size(); ++i)
+    {
+        unique_ptr<MegaNode> zombieCheck(api->getNodeByHandle(expectedRemovedHandles[i]));
+        const auto removedVersionIndex = static_cast<size_t>(middle + 1) + i;
+        ASSERT_FALSE(zombieCheck) << "ZOMBIE NODE DETECTED: version at index "
+                                  << removedVersionIndex << " (handle "
+                                  << Base64Str<MegaClient::NODEHANDLE>(expectedRemovedHandles[i])
+                                  << ") still exists after doDeleteNode. "
+                                  << "This indicates proctree() did not visit "
+                                  << "version children on the slow path.";
+    }
+
+    // After the second injection, allVersions->get(1) is stale. Use versionOneHandle.
+    {
+        unique_ptr<MegaNode> versionOneNode(api->getNodeByHandle(versionOneHandle));
+        ASSERT_TRUE(versionOneNode) << "version-one node not found after doDeleteNode";
+        versionsAfterRemoval.reset(api->getVersions(versionOneNode.get()));
+    }
     ASSERT_EQ(versionsAfterRemoval->size(), middle);
     for (int i = 0; i < versionsAfterRemoval->size(); ++i)
     {
@@ -16291,23 +16387,323 @@ TEST_F(SdkTest, SdkVersionManagement)
     ASSERT_EQ(API_OK, doRemoveVersions(0));
     waitForResponse(&check);
     resetOnNodeUpdateCompletionCBs();
-    versionsAfterRemoval.reset(api->getVersions(allVersions->get(1)));
+    {
+        unique_ptr<MegaNode> vOneNode(api->getNodeByHandle(versionOneHandle));
+        ASSERT_TRUE(vOneNode) << "version-one node not found after removeVersions";
+        versionsAfterRemoval.reset(api->getVersions(vOneNode.get()));
+    }
     ASSERT_EQ(versionsAfterRemoval->size(), 1);
-    ASSERT_EQ(versionsAfterRemoval->get(0)->getHandle(), allVersions->get(1)->getHandle());
+    ASSERT_EQ(versionsAfterRemoval->get(0)->getHandle(), versionOneHandle);
 
+    // Delete a version by the API when limit was reached (chain must have 100 versions)
+    // Skip this section when slow-path injection is active: uploading 102 versions
+    // after two locallogout+resumeSession cycles causes API_ENOENT failures that are
+    // unrelated to the slow-path bug under test. The version limit feature is tested
+    // by the fast-path SdkVersionManagement test.
+    if (!preDeleteInjection)
+    {
+        doSetFileVersionsOption(0, false); // enable versioning
+        int verLimit = 102;
+        ASSERT_NO_FATAL_FAILURE(upldVersions(UPFILE, verLimit, folder1Node.get(), &fileHandle));
+        fileNode.reset(api->getNodeByHandle(fileHandle));
+        allVersions.reset(api->getVersions(fileNode.get()));
+        ASSERT_EQ(allVersions->size(), verLimit);
+        // upload one more version
+        ASSERT_EQ(upldSingleVersion(UPFILE, verLimit + 1, folder1Node.get(), &fileHandle), API_OK);
+        fileNode.reset(api->getNodeByHandle(fileHandle));
+        allVersions.reset(api->getVersions(fileNode.get()));
+        ASSERT_EQ(allVersions->size(), verLimit);
+    }
+}
 
-    //  Delete a version by the API when limit was reached (chain must have 100 versions)
+TEST_F(SdkTest, SdkVersionManagement)
+{
+    LOG_info << "___TEST SdkVersionManagement";
+    ASSERT_NO_FATAL_FAILURE(runVersionManagementSequence());
+}
+
+/**
+ * ___SdkVersionManagement_SlowPath___
+ *
+ * Identical to SdkVersionManagement but forces the slow path of getChildren_internal()
+ * via locallogout + resumeSession + fetchnodes before deletion operations begin.
+ *
+ * This converts the AF5 architectural finding ("fast/slow path behavioral split in
+ * getChildren_internal() is a design defect causing non-deterministic behavior") into
+ * an executable invariant: the final state after processing all action packets must be
+ * identical regardless of whether the fast path or slow path is taken.
+ *
+ * Pre-fix: FAILS because the slow path filters out version children during proctree()
+ * traversal, creating zombie nodes that cause version count assertions to fail.
+ * Post-fix: PASSES, confirming fast/slow path parity.
+ */
+TEST_F(SdkTest, SdkVersionManagement_SlowPath)
+{
+    LOG_info << "___TEST SdkVersionManagement_SlowPath";
+    const auto injectSlowPath = [this]()
+    {
+        // Save session, then force slow path via locallogout + resumeSession + fetchnodes.
+        // After this sequence, non-root nodes have mAllChildrenHandleLoaded == false,
+        // so getChildren_internal() takes the DB-backed slow path.
+        std::unique_ptr<char[]> session(dumpSession(0));
+        ASSERT_TRUE(session) << "Failed to dump session before slow-path injection";
+
+        ASSERT_NO_FATAL_FAILURE(locallogout(0));
+        ASSERT_NO_FATAL_FAILURE(resumeSession(session.get(), 0));
+        ASSERT_NO_FATAL_FAILURE(fetchnodes(0));
+    };
+    runVersionManagementSequence(injectSlowPath);
+}
+
+/**
+ * ___SdkSearchDoesNotReturnVersionNodes___
+ *
+ * Verify that search via MegaSearchFilter never returns version nodes, both on
+ * the fast path (nodes in RAM) and on the slow path (DB-backed getChildren).
+ *
+ * This covers a gap in test coverage: the SQL WHERE clause
+ * `AND (flags & ?5) = 0` in getChildren and the `AND (flags & ?1 = 0)` in the
+ * nodesOfShares CTE are not exercised by any existing test through the public
+ * search / getChildren(MegaSearchFilter*) API.
+ */
+TEST_F(SdkTest, SdkSearchDoesNotReturnVersionNodes)
+{
+    LOG_info << "___TEST SdkSearchDoesNotReturnVersionNodes";
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
+
     doSetFileVersionsOption(0, false); // enable versioning
-    int verLimit = 102;
-    ASSERT_NO_FATAL_FAILURE(upldVersions(UPFILE, verLimit, folder1Node.get(), &fileHandle));
-    fileNode.reset(api->getNodeByHandle(fileHandle));
-    allVersions.reset(api->getVersions(fileNode.get()));
-    ASSERT_EQ(allVersions->size(), verLimit);
-    // upload one more version
-    ASSERT_EQ(upldSingleVersion(UPFILE, verLimit + 1, folder1Node.get(), &fileHandle), API_OK);
-    fileNode.reset(api->getNodeByHandle(fileHandle));
-    allVersions.reset(api->getVersions(fileNode.get()));
-    ASSERT_EQ(allVersions->size(), verLimit);
+    auto& api = megaApi[0];
+    unique_ptr<MegaNode> rootNode(api->getRootNode());
+
+    // Create a test folder
+    const std::string folderName = "SearchVersionTestFolder";
+    auto folderHandle = createFolder(0, folderName.c_str(), rootNode.get());
+    ASSERT_NE(folderHandle, UNDEF);
+    unique_ptr<MegaNode> folderNode(api->getNodeByHandle(folderHandle));
+    ASSERT_TRUE(folderNode);
+
+    // Upload initial file
+    const std::string fileName = "searchVersionTestFile.txt";
+    createFile(fileName, false, "initial_content");
+    MegaHandle fileHandle = INVALID_HANDLE;
+    ASSERT_EQ(API_OK,
+              doStartUpload(0,
+                            &fileHandle,
+                            fileName.c_str(),
+                            folderNode.get(),
+                            fileName.c_str(),
+                            ::mega::MegaApi::INVALID_CUSTOM_MOD_TIME,
+                            nullptr,
+                            false,
+                            false,
+                            nullptr));
+    deleteFile(fileName);
+    ASSERT_NE(fileHandle, INVALID_HANDLE);
+
+    // Upload 3 more versions
+    for (int v = 1; v <= 3; ++v)
+    {
+        const std::string localName = fileName + "_v" + std::to_string(v);
+        createFile(localName, false, "version_" + std::to_string(v));
+        MegaHandle vh = INVALID_HANDLE;
+        ASSERT_EQ(API_OK,
+                  doStartUpload(0,
+                                &vh,
+                                localName.c_str(),
+                                folderNode.get(),
+                                fileName.c_str(),
+                                ::mega::MegaApi::INVALID_CUSTOM_MOD_TIME,
+                                nullptr,
+                                false,
+                                false,
+                                nullptr));
+        deleteFile(localName);
+        fileHandle = vh; // track latest
+    }
+
+    // Verify versions exist
+    unique_ptr<MegaNode> fileNode(api->getNodeByHandle(fileHandle));
+    ASSERT_TRUE(fileNode);
+    unique_ptr<MegaNodeList> allVersions(api->getVersions(fileNode.get()));
+    ASSERT_TRUE(allVersions);
+    ASSERT_GE(allVersions->size(), 2) << "Expected multiple versions";
+
+    // --- Fast path: search by name within the folder ---
+    {
+        unique_ptr<MegaSearchFilter> filter(MegaSearchFilter::createInstance());
+        filter->byName("searchVersionTestFile");
+        filter->byLocationHandle(folderHandle);
+        unique_ptr<MegaNodeList> results(api->search(filter.get()));
+        ASSERT_TRUE(results);
+        ASSERT_EQ(results->size(), 1)
+            << "Search should return exactly 1 node (current version), not " << results->size()
+            << " (version nodes must be excluded)";
+    }
+
+    // --- Fast path: getChildren with filter on the folder ---
+    {
+        unique_ptr<MegaSearchFilter> filter(MegaSearchFilter::createInstance());
+        filter->byLocationHandle(folderHandle);
+        unique_ptr<MegaNodeList> children(
+            api->getChildren(filter.get(), MegaApi::ORDER_DEFAULT_ASC));
+        ASSERT_TRUE(children);
+        ASSERT_EQ(children->size(), 1) << "getChildren(filter) should return exactly 1 node, not "
+                                       << children->size() << " (version nodes must be excluded)";
+        ASSERT_STREQ(children->get(0)->getName(), fileName.c_str());
+    }
+
+    // --- Force slow path via locallogout + resumeSession + fetchnodes ---
+    unique_ptr<char[]> session(dumpSession(0));
+    ASSERT_TRUE(session);
+    ASSERT_NO_FATAL_FAILURE(locallogout(0));
+    ASSERT_NO_FATAL_FAILURE(resumeSession(session.get(), 0));
+    ASSERT_NO_FATAL_FAILURE(fetchnodes(0));
+
+    // --- Slow path: search by name ---
+    {
+        unique_ptr<MegaSearchFilter> filter(MegaSearchFilter::createInstance());
+        filter->byName("searchVersionTestFile");
+        filter->byLocationHandle(folderHandle);
+        unique_ptr<MegaNodeList> results(api->search(filter.get()));
+        ASSERT_TRUE(results);
+        ASSERT_EQ(results->size(), 1)
+            << "Slow-path search should return exactly 1 node (current version), not "
+            << results->size() << " (version nodes must be excluded on slow path too)";
+    }
+
+    // --- Slow path: getChildren with filter ---
+    {
+        unique_ptr<MegaSearchFilter> filter(MegaSearchFilter::createInstance());
+        filter->byLocationHandle(folderHandle);
+        unique_ptr<MegaNodeList> children(
+            api->getChildren(filter.get(), MegaApi::ORDER_DEFAULT_ASC));
+        ASSERT_TRUE(children);
+        ASSERT_EQ(children->size(), 1)
+            << "Slow-path getChildren(filter) should return exactly 1 node, not "
+            << children->size() << " (version nodes must be excluded on slow path too)";
+        ASSERT_STREQ(children->get(0)->getName(), fileName.c_str());
+    }
+}
+
+/**
+ * ___SdkGetChildrenFilterExcludesVersions___
+ *
+ * Verify that getChildren(MegaSearchFilter*) on a folder containing both regular
+ * files and versioned files returns only the current versions, never old version
+ * nodes. Tests both fast path and slow path.
+ */
+TEST_F(SdkTest, SdkGetChildrenFilterExcludesVersions)
+{
+    LOG_info << "___TEST SdkGetChildrenFilterExcludesVersions";
+    ASSERT_NO_FATAL_FAILURE(getAccountsForTest(1));
+
+    doSetFileVersionsOption(0, false); // enable versioning
+    auto& api = megaApi[0];
+    unique_ptr<MegaNode> rootNode(api->getRootNode());
+
+    // Create test folder
+    const std::string folderName = "FilterVersionTestFolder";
+    auto folderHandle = createFolder(0, folderName.c_str(), rootNode.get());
+    ASSERT_NE(folderHandle, UNDEF);
+    unique_ptr<MegaNode> folderNode(api->getNodeByHandle(folderHandle));
+    ASSERT_TRUE(folderNode);
+
+    // Upload two files: fileA.txt and fileB.txt
+    auto uploadFile = [&](const std::string& name, const std::string& content) -> MegaHandle
+    {
+        createFile(name, false, content);
+        MegaHandle fh = INVALID_HANDLE;
+        EXPECT_EQ(API_OK,
+                  doStartUpload(0,
+                                &fh,
+                                name.c_str(),
+                                folderNode.get(),
+                                name.c_str(),
+                                ::mega::MegaApi::INVALID_CUSTOM_MOD_TIME,
+                                nullptr,
+                                false,
+                                false,
+                                nullptr));
+        deleteFile(name);
+        return fh;
+    };
+
+    MegaHandle handleA = uploadFile("fileA.txt", "initial_A");
+    ASSERT_NE(handleA, INVALID_HANDLE);
+    MegaHandle handleB = uploadFile("fileB.txt", "initial_B");
+    ASSERT_NE(handleB, INVALID_HANDLE);
+
+    // Create 2 versions of fileA.txt (3 total including the original)
+    for (int v = 1; v <= 2; ++v)
+    {
+        const std::string localName = "fileA.txt_v" + std::to_string(v);
+        createFile(localName, false, "versionA_" + std::to_string(v));
+        MegaHandle vh = INVALID_HANDLE;
+        ASSERT_EQ(API_OK,
+                  doStartUpload(0,
+                                &vh,
+                                localName.c_str(),
+                                folderNode.get(),
+                                "fileA.txt",
+                                ::mega::MegaApi::INVALID_CUSTOM_MOD_TIME,
+                                nullptr,
+                                false,
+                                false,
+                                nullptr));
+        deleteFile(localName);
+        handleA = vh;
+    }
+
+    // Verify versions exist for fileA
+    unique_ptr<MegaNode> fileANode(api->getNodeByHandle(handleA));
+    ASSERT_TRUE(fileANode);
+    ASSERT_TRUE(api->hasVersions(fileANode.get())) << "fileA should have versions";
+
+    // --- Fast path: getChildren(filter) should return exactly 2 files ---
+    {
+        unique_ptr<MegaSearchFilter> filter(MegaSearchFilter::createInstance());
+        filter->byLocationHandle(folderHandle);
+        unique_ptr<MegaNodeList> children(
+            api->getChildren(filter.get(), MegaApi::ORDER_DEFAULT_ASC));
+        ASSERT_TRUE(children);
+        ASSERT_EQ(children->size(), 2)
+            << "Fast-path getChildren(filter) should return 2 files, got " << children->size();
+
+        // Verify the returned nodes are the current versions, not old ones
+        std::set<std::string> names;
+        for (int i = 0; i < children->size(); ++i)
+        {
+            names.insert(children->get(i)->getName());
+        }
+        EXPECT_TRUE(names.count("fileA.txt")) << "fileA.txt not found in children";
+        EXPECT_TRUE(names.count("fileB.txt")) << "fileB.txt not found in children";
+    }
+
+    // --- Force slow path ---
+    unique_ptr<char[]> session(dumpSession(0));
+    ASSERT_TRUE(session);
+    ASSERT_NO_FATAL_FAILURE(locallogout(0));
+    ASSERT_NO_FATAL_FAILURE(resumeSession(session.get(), 0));
+    ASSERT_NO_FATAL_FAILURE(fetchnodes(0));
+
+    // --- Slow path: getChildren(filter) should still return exactly 2 files ---
+    {
+        unique_ptr<MegaSearchFilter> filter(MegaSearchFilter::createInstance());
+        filter->byLocationHandle(folderHandle);
+        unique_ptr<MegaNodeList> children(
+            api->getChildren(filter.get(), MegaApi::ORDER_DEFAULT_ASC));
+        ASSERT_TRUE(children);
+        ASSERT_EQ(children->size(), 2)
+            << "Slow-path getChildren(filter) should return 2 files, got " << children->size();
+
+        std::set<std::string> names;
+        for (int i = 0; i < children->size(); ++i)
+        {
+            names.insert(children->get(i)->getName());
+        }
+        EXPECT_TRUE(names.count("fileA.txt")) << "fileA.txt not found on slow path";
+        EXPECT_TRUE(names.count("fileB.txt")) << "fileB.txt not found on slow path";
+    }
 }
 
 /**

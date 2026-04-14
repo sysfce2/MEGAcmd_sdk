@@ -12706,7 +12706,7 @@ void MegaClient::proctree(std::shared_ptr<Node> n, TreeProc* tp, bool skipinshar
             it++;
             if (!(skipinshares && node->inshare))
             {
-                proctree(node, tp, skipinshares);
+                proctree(node, tp, skipinshares, skipversions);
             }
         }
     }
@@ -19575,11 +19575,9 @@ std::shared_ptr<Node> MegaClient::getovnode(Node *parent, string *name)
     return nullptr;
 }
 
-sharedNode_list MegaClient::getChildren(const Node* parent,
-                                        CancelToken cancelToken,
-                                        bool includeVersions)
+sharedNode_list MegaClient::getChildren(const Node* parent, CancelToken cancelToken)
 {
-    return mNodeManager.getChildren(parent, cancelToken, includeVersions);
+    return mNodeManager.getChildren(parent, cancelToken);
 }
 
 size_t MegaClient::getNumberOfChildren(NodeHandle parentHandle)

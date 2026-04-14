@@ -415,17 +415,13 @@ std::shared_ptr<Node> NodeManager::getNodeByHandle_internal(NodeHandle handle)
     return node;
 }
 
-sharedNode_list NodeManager::getChildren(const Node* parent,
-                                         CancelToken cancelToken,
-                                         bool includeVersions)
+sharedNode_list NodeManager::getChildren(const Node* parent, CancelToken cancelToken)
 {
     LockGuard g(mMutex);
-    return getChildren_internal(parent, cancelToken, includeVersions);
+    return getChildren_internal(parent, cancelToken);
 }
 
-sharedNode_list NodeManager::getChildren_internal(const Node* parent,
-                                                  CancelToken cancelToken,
-                                                  bool includeVersions)
+sharedNode_list NodeManager::getChildren_internal(const Node* parent, CancelToken cancelToken)
 {
     assert(mMutex.owns_lock());
 
@@ -482,15 +478,20 @@ sharedNode_list NodeManager::getChildren_internal(const Node* parent,
             }
         }
 
+        // Internal traversal contract (pre-Oct-2023 behavior): return every
+        // direct child, including version nodes of FILENODE parents. Callers
+        // that want version-less results (public MegaApi::getChildren path)
+        // go through NodeManager::getChildren(NodeSearchFilter&, ...) which
+        // uses the DB default skipVersions=true.
         std::vector<std::pair<NodeHandle, NodeSerialized>> nodesFromTable;
         NodeSearchFilter nf;
-        nf.includeVersions(includeVersions);
         nf.byAncestors({parent->nodehandle, UNDEF, UNDEF});
         mTable->getChildren(nf,
                             0 /*Order none*/,
                             nodesFromTable,
                             cancelToken,
-                            NodeSearchPage{0, 0});
+                            NodeSearchPage{0, 0},
+                            /*skipVersions*/ false);
         if (cancelToken.isCancelled())
         {
             childrenList.clear();
@@ -1745,7 +1746,7 @@ void NodeManager::notifyPurge()
                     // so we can avoid lookups for non existing parent handle.
                     removeChild(n->parent.get(), h);
                 }
-                sharedNode_list children = getChildren(n.get());
+                sharedNode_list children = getChildren_internal(n.get());
                 for (auto& child : children)
                 {
                     child->parent = nullptr;
