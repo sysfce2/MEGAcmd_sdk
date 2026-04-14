@@ -18937,6 +18937,9 @@ bool MegaClient::startxfer(direction_t d, File* f, TransferDbCommitter& committe
 
                 if (d == PUT)
                 {
+                    if (it->second->localfilename.empty())
+                        continue;
+
                     // for uploads, check for the same source file
                     if (it->second->localfilename == f->getLocalname())
                     {
