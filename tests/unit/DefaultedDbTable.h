@@ -82,7 +82,13 @@ public:
     {
         return 0;
     }
-    bool getChildren(const mega::NodeSearchFilter&, int, std::vector<std::pair<mega::NodeHandle, mega::NodeSerialized>>&, mega::CancelToken, const mega::NodeSearchPage&) override
+
+    bool getChildren(const mega::NodeSearchFilter&,
+                     int,
+                     std::vector<std::pair<mega::NodeHandle, mega::NodeSerialized>>&,
+                     mega::CancelToken,
+                     const mega::NodeSearchPage&,
+                     const bool /*skipVersions*/) override
     {
         return false;
         //throw NotImplemented(__func__);

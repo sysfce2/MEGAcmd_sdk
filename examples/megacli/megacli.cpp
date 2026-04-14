@@ -2989,8 +2989,7 @@ void exec_fileversions(autocomplete::ACState& s)
             bool lookingFor = true;
             while (lookingFor)
             {
-                sharedNode_list nodeList =
-                    client->getChildren(current.get(), mega::CancelToken(), true);
+                sharedNode_list nodeList = client->getChildren(current.get());
                 if (nodeList.empty())
                 {
                     lookingFor = false;
