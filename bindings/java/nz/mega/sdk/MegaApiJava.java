@@ -7475,6 +7475,58 @@ public class MegaApiJava {
     }
 
     /**
+     * Set the maximum number of connections per transfer
+     * <p>
+     * The maximum number of allowed connections is 100. If a higher number of connections is
+     * passed to this function, it will fail with the error code API_ETOOMANY.
+     * <p>
+     * The associated request type with this request is MegaRequest::TYPE_SET_MAX_CONNECTIONS
+     * Valid data in the MegaRequest object received on callbacks:
+     * - MegaRequest::getParamType - Returns the value for \c direction parameter
+     * - MegaRequest::getNumber - Returns the number of \c connections
+     *
+     * @param direction   Direction of transfers
+     *                    Valid values for this parameter are:
+     *                    - MegaTransfer::TYPE_DOWNLOAD = 0
+     *                    - MegaTransfer::TYPE_UPLOAD = 1
+     * @param connections Maximum number of connection (it should between 1 and 100)
+     */
+    public void setMaxConnections(int direction, int connections, MegaRequestListenerInterface listener) {
+        megaApi.setMaxConnections(direction, connections, createDelegateRequestListener(listener));
+    }
+
+    /**
+     * Get the maximum number of connections per upload transfer.
+     * <p>
+     * The associated request type with this request is MegaRequest::TYPE_GET_MAX_CONNECTIONS
+     * Valid data in the MegaRequest object received on callbacks:
+     * - MegaRequest::getParamType - Returns the value for transfer direction (PUT)
+     * - MegaRequest::getNumber - Returns the max number of connections for uploads.
+     * <p>
+     * Possible return values for this function are:
+     * - MegaError::API_OK if successfully retrieved the max number of connections for uploads
+     * - MegaError::API_EINTERNAL if there was an internal issue when setting the transfer
+     * direction.
+     */
+    public void getMaxUploadConnections(MegaRequestListenerInterface listener) {
+        megaApi.getMaxUploadConnections(createDelegateRequestListener(listener));
+    }
+
+    /**
+     * Get the maximum number of connections per download transfer.
+     * <p>
+     * The associated request type with this request is MegaRequest::TYPE_GET_MAX_CONNECTIONS
+     * Valid data in the MegaRequest object received on callbacks:
+     * - MegaRequest::getParamType - Returns the value for transfer direction (GET)
+     * - MegaRequest::getNumber - Returns the max number of connections for downloads.
+     * <p>
+     * Possible return values for this function are the same ones as getMaxUploadConnections()
+     */
+    public void getMaxDownloadConnections(MegaRequestListenerInterface listener) {
+        megaApi.getMaxDownloadConnections(createDelegateRequestListener(listener));
+    }
+
+    /**
      * Set the transfer method for downloads
      * <p>
      * Valid methods are:
