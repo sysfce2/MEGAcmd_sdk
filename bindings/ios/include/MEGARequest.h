@@ -249,8 +249,9 @@ typedef NS_ENUM (NSInteger, MEGARequestType) {
     MEGARequestTypeCheckSyncUploadThrottledValues = 205,
     MEGARequestTypeRunNetworkConnectivityTest = 206,
     MEGARequestTypeAddSyncPrevalidation = 207,
-    MEGARequestTypeGetSubscriptionCancellationDetails = 208,
-    TotalOfRequestTypes = 209
+    MEGARequestTypeGetMaxConnections = 208,
+    MEGARequestTypeGetSubscriptionCancellationDetails = 209,
+    TotalOfRequestTypes = 210
 };
 
 typedef NS_ENUM (NSInteger, MEGANodeAccessLevel) {
