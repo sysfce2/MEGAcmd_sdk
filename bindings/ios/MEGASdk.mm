@@ -1765,6 +1765,12 @@ using namespace mega;
     }
 }
 
+- (void)setUnshareableCoordinatesForNodeHandle:(MEGAHandle)nodeHandle latitude:(double)latitude longitude:(double)longitude {
+    if (self.megaApi) {
+        self.megaApi->setUnshareableNodeCoordinates(nodeHandle, latitude, longitude);
+    }
+}
+
 - (void)exportNode:(MEGANode *)node delegate:(id<MEGARequestDelegate>)delegate {
     if (self.megaApi) {
         self.megaApi->exportNode(node.getCPtr, 0, false, false, [self createDelegateMEGARequestListener:delegate singleListener:YES]);
