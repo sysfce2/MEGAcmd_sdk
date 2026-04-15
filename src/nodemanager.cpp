@@ -1055,6 +1055,18 @@ std::shared_ptr<Node> NodeManager::getNodeByFingerprint_internal(FileFingerprint
     return node;
 }
 
+void NodeManager::setChildScanDbThreshold(size_t threshold)
+{
+    LockGuard g(mMutex);
+    mChildScanDbThreshold = threshold;
+}
+
+size_t NodeManager::getChildScanDbThreshold() const
+{
+    LockGuard g(mMutex);
+    return mChildScanDbThreshold;
+}
+
 std::shared_ptr<Node> NodeManager::childNodeByNameType(const Node* parent, const std::string &name, nodetype_t nodeType)
 {
     LockGuard g(mMutex);
@@ -1080,15 +1092,24 @@ std::shared_ptr<Node> NodeManager::childNodeByNameType_internal(const Node* pare
         return nullptr; // valid case
     }
 
-    if (parent->mNodePosition->second.mChildren)
+    // Traverse more than mChildScanDbThreshold children would
+    // cost more time than query DB. So skip the RAM scan in this case
+    const bool skipRamScan =
+        parent->mNodePosition->second.mChildren ?
+            parent->mNodePosition->second.mChildren->size() > mChildScanDbThreshold :
+            false;
+
+    if (!skipRamScan && parent->mNodePosition->second.mChildren)
     {
         for (const auto& itNode : *parent->mNodePosition->second.mChildren)
         {
             if (itNode.second)
             {
-                shared_ptr<Node> node = itNode.second->getNodeInRam();
+                // We don't need to update LRU during traversal
+                shared_ptr<Node> node = itNode.second->getNodeInRam(false);
                 if (node && node->type == nodeType && name == node->displayname())
                 {
+                    insertNodeCacheLRU_internal(node);
                     return node;
                 }
                 else if (!node)
@@ -1104,7 +1125,7 @@ std::shared_ptr<Node> NodeManager::childNodeByNameType_internal(const Node* pare
         }
     }
 
-    if (allChildrenLoaded)
+    if (allChildrenLoaded && !skipRamScan)
     {
         return nullptr; // There is no match
     }
@@ -1115,7 +1136,17 @@ std::shared_ptr<Node> NodeManager::childNodeByNameType_internal(const Node* pare
         return nullptr;  // Not found at DB either
     }
 
-    assert(!getNodeInRAM(nodeSerialized.first));  // not loaded yet
+    if (skipRamScan)
+    {
+        if (shared_ptr<Node> inRam = getNodeInRAM(nodeSerialized.first))
+        {
+            return inRam;
+        }
+    }
+    else
+    {
+        assert(!getNodeInRAM(nodeSerialized.first)); // not loaded yet
+    }
     return getNodeFromNodeSerialized(nodeSerialized.second);
 }
 
