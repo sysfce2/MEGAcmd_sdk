@@ -1299,6 +1299,14 @@ DirNotify* AndroidFileSystemAccess::newdirnotify(LocalNode& root,
 }
 #endif
 
+// replace characters that are not allowed in local fs names with a %xx escape sequence
+bool AndroidFileSystemAccess::needsTrailingDotEscape(FileSystemType) const
+{
+    // SAF/DocumentFile cannot store names ending in '.'. Escape trailing dots consistently so
+    // sync/transfers can round-trip the original cloud name via unescapefsincompatible().
+    return true;
+}
+
 bool AndroidFileSystemAccess::getlocalfstype(const LocalPath& path, FileSystemType& type) const
 {
     return LinuxFileSystemAccess::getlocalfstype(getStandartPath(path), type);
