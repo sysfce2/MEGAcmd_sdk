@@ -2610,6 +2610,7 @@ public:
     bool handleScKeepAliveInSuccessState();
     void handleScErrorInSuccessState();
     void handleScInFailureState();
+    void clearForScError();
     bool handleScTimeoutInFlightState();
 
     // Process actual data from the server-client channel
