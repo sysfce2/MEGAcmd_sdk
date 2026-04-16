@@ -13,6 +13,11 @@
 #define FUSEDebugF(format, ...) \
   LogDebugF(::mega::fuse::logger(), (format), __VA_ARGS__)
 
+// Emit a verbose message.
+#define FUSEVerbose1(format) LogVerbose1(::mega::fuse::logger(), (format))
+
+#define FUSEVerboseF(format, ...) LogVerboseF(::mega::fuse::logger(), (format), __VA_ARGS__)
+
 // Emit an info message.
 #define FUSEInfo1(format) \
   LogInfo1(::mega::fuse::logger(), (format))

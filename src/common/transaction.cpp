@@ -39,7 +39,7 @@ Transaction::Transaction(Badge<Database>, Database& database)
         mInProgress = true;
 
         // Let debuggers know the transaction was started.
-        LogDebug1(logger(), "Transaction started");
+        LogVerbose1(logger(), "Transaction started");
     }
     catch (std::runtime_error& exception)
     {
@@ -97,7 +97,7 @@ try
     mInProgress = false;
 
     // Let debuggers know the transaction was committed.
-    LogDebug1(logger(), "Transaction committed");
+    LogVerbose1(logger(), "Transaction committed");
 }
 
 catch (std::runtime_error& exception)
@@ -166,7 +166,7 @@ try
     mInProgress = false;
 
     // Let debuggers know the transaction was rolled back.
-    LogDebug1(logger(), "Transaction rolled back");
+    LogVerbose1(logger(), "Transaction rolled back");
 }
 
 catch (std::runtime_error& exception)

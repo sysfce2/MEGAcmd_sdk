@@ -31,27 +31,27 @@ using fuse::toString;
 
 void LockableTraits<FileIOContext>::acquired(const FileIOContext& context)
 {
-    FUSEDebugF("Acquired lock on file IO context %s", toString(context.id()).c_str());
+    FUSEVerboseF("Acquired lock on file IO context %s", toString(context.id()).c_str());
 }
 
 void LockableTraits<FileIOContext>::acquiring(const FileIOContext& context)
 {
-    FUSEDebugF("Acquiring lock on file IO context %s", toString(context.id()).c_str());
+    FUSEVerboseF("Acquiring lock on file IO context %s", toString(context.id()).c_str());
 }
 
 void LockableTraits<FileIOContext>::couldntAcquire(const FileIOContext& context)
 {
-    FUSEDebugF("Couldn't acquire lock on file IO context %s", toString(context.id()).c_str());
+    FUSEVerboseF("Couldn't acquire lock on file IO context %s", toString(context.id()).c_str());
 }
 
 void LockableTraits<FileIOContext>::released(const FileIOContext& context)
 {
-    FUSEDebugF("Released lock on file IO context %s", toString(context.id()).c_str());
+    FUSEVerboseF("Released lock on file IO context %s", toString(context.id()).c_str());
 }
 
 void LockableTraits<FileIOContext>::tryAcquire(const FileIOContext& context)
 {
-    FUSEDebugF("Trying to acquire lock on file IO context %s", toString(context.id()).c_str());
+    FUSEVerboseF("Trying to acquire lock on file IO context %s", toString(context.id()).c_str());
 }
 
 } // common
