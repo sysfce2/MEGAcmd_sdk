@@ -1753,15 +1753,15 @@ using namespace mega;
     }
 }
 
-- (void)setUnshareableNodeCoordinates:(MEGANode *)node latitude:(double)latitude longitude:(double)longitude delegate:(id<MEGARequestDelegate>)delegate {
+- (void)setUnshareableCoordinatesForNodeHandle:(MEGAHandle)nodeHandle latitude:(double)latitude longitude:(double)longitude {
     if (self.megaApi) {
-        self.megaApi->setUnshareableNodeCoordinates(node.getCPtr, latitude, longitude , [self createDelegateMEGARequestListener:delegate singleListener:YES]);
+        self.megaApi->setUnshareableNodeCoordinates(nodeHandle, latitude, longitude);
     }
 }
 
-- (void)setUnshareableNodeCoordinates:(MEGANode *)node latitude:(double)latitude longitude:(double)longitude {
+- (void)setUnshareableCoordinatesForNodeHandle:(MEGAHandle)nodeHandle latitude:(double)latitude longitude:(double)longitude delegate:(id<MEGARequestDelegate>)delegate {
     if (self.megaApi) {
-        self.megaApi->setUnshareableNodeCoordinates(node.getCPtr, latitude, longitude);
+        self.megaApi->setUnshareableNodeCoordinates(nodeHandle, latitude, longitude, [self createDelegateMEGARequestListener:delegate singleListener:YES]);
     }
 }
 

@@ -3998,12 +3998,11 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
  * - [MEGARequest numDetails] - Returns the longitude, scaled to integer in the range of [0, 2^24]
  * - [MEGARequest transferTag] - Returns the latitude, scaled to integer in the range of [0, 2^24)
  *
- * @param node MEGANode that will receive the information.
+ * @param nodeHandle handle of the MEGANode that will receive the information.
  * @param latitude Latitude in signed decimal degrees notation.
  * @param longitude Longitude in signed decimal degrees notation.
- * @param delegate Delegate to track this request.
  */
-- (void)setUnshareableNodeCoordinates:(MEGANode *)node latitude:(double)latitude longitude:(double)longitude delegate:(id<MEGARequestDelegate>)delegate;
+- (void)setUnshareableCoordinatesForNodeHandle:(MEGAHandle)nodeHandle latitude:(double)latitude longitude:(double)longitude;
 
 /**
  * @brief Set the GPS coordinates of image files as a node attribute.
@@ -4022,11 +4021,12 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
  * - [MEGARequest numDetails] - Returns the longitude, scaled to integer in the range of [0, 2^24]
  * - [MEGARequest transferTag] - Returns the latitude, scaled to integer in the range of [0, 2^24)
  *
- * @param node MEGANode that will receive the information.
+ * @param nodeHandle handle of the MEGANode that will receive the information.
  * @param latitude Latitude in signed decimal degrees notation.
  * @param longitude Longitude in signed decimal degrees notation.
+ * @param delegate Delegate to track this request.
  */
-- (void)setUnshareableNodeCoordinates:(MEGANode *)node latitude:(double)latitude longitude:(double)longitude;
+- (void)setUnshareableCoordinatesForNodeHandle:(MEGAHandle)nodeHandle latitude:(double)latitude longitude:(double)longitude delegate:(id<MEGARequestDelegate>)delegate;
 
 /**
  * @brief Generate a public link of a file/folder in MEGA.
