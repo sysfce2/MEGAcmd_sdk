@@ -23768,26 +23768,26 @@ void MegaApiImpl::setMaxConnections(int direction, int connections, MegaRequestL
                 return API_EARGS;
             }
 
-            if ((unsigned int) connections > MegaClient::MAX_NUM_CONNECTIONS)
+            if (connections > static_cast<int>(MegaClient::MAX_NUM_CONNECTIONS))
             {
                 return API_ETOOMANY;
             }
 
+            error e = API_OK;
             if (direction == -1)
             {
-                client->setmaxconnections(GET, connections);
-                client->setmaxconnections(PUT, connections);
+                e = client->setmaxconnectionsandpersist(static_cast<uint8_t>(connections));
             }
             else if (direction == MegaTransfer::TYPE_DOWNLOAD)
             {
-                client->setmaxconnections(GET, connections);
+                e = client->setmaxconnectionsandpersist(GET, static_cast<uint8_t>(connections));
             }
             else
             {
-                client->setmaxconnections(PUT, connections);
+                e = client->setmaxconnectionsandpersist(PUT, static_cast<uint8_t>(connections));
             }
 
-            fireOnRequestFinish(request, std::make_unique<MegaErrorPrivate>(API_OK));
+            fireOnRequestFinish(request, std::make_unique<MegaErrorPrivate>(e));
             return API_OK;
         };
 

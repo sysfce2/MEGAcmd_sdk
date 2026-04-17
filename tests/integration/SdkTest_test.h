@@ -1545,6 +1545,12 @@ public:
         return rt.waitForResult();
     }
 
+    struct TransferMaxConnections
+    {
+        int upload = -999;
+        int download = -999;
+    };
+
     template<typename... requestArgs>
     ErrorCodes doGetMaxUploadConnections(const unsigned apiIndex,
                                          int& direction,
@@ -1566,11 +1572,34 @@ public:
                                            requestArgs... args)
     {
         RequestTracker rt(megaApi[apiIndex].get());
-        megaApi[apiIndex]->getMaxUploadConnections(args..., &rt);
+        megaApi[apiIndex]->getMaxDownloadConnections(args..., &rt);
         const auto err = rt.waitForResult();
         direction = err == API_OK ? rt.getParamType() : -999;
         maxConnections = err == API_OK ? rt.getNumber() : -999;
         return err;
+    }
+
+    ErrorCodes doGetMaxConnections(const unsigned apiIndex, TransferMaxConnections& maxConnections)
+    {
+        int direction = -999;
+        const auto uploadErr =
+            doGetMaxUploadConnections(apiIndex, direction, maxConnections.upload);
+        if (uploadErr != API_OK)
+        {
+            return uploadErr;
+        }
+        if (direction != PUT)
+        {
+            return API_EINTERNAL;
+        }
+
+        const auto downloadErr =
+            doGetMaxDownloadConnections(apiIndex, direction, maxConnections.download);
+        if (downloadErr != API_OK)
+        {
+            return downloadErr;
+        }
+        return direction == GET ? API_OK : API_EINTERNAL;
     }
 
     /* MegaVpnCredentials */

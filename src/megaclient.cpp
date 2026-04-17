@@ -25,6 +25,7 @@
 #include "mega/heartbeats.h"
 #include "mega/logging.h"
 #include "mega/mediafileattribute.h"
+#include "mega/megaclientprefs.h"
 #include "mega/network_connectivity_test.h"
 #include "mega/recent_actions.h"
 #include "mega/scoped_helpers.h"
@@ -39,6 +40,7 @@
 #include <mega/common/normalized_path.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <ctime>
@@ -2008,6 +2010,8 @@ MegaClient::MegaClient(MegaApp* a,
         fsaccess = std::make_unique<LinuxFileSystemAccess>();
     }
 #endif
+    mClientPrefsStore = std::make_unique<ClientPrefsStore>(rng, *fsaccess, dbaccess);
+
     mJourneyId =
         std::make_unique<JourneyID>(fsaccess, dbaccess ? dbaccess->rootPath() : LocalPath());
 
@@ -2098,7 +2102,17 @@ MegaClient::MegaClient(MegaApp* a,
     connections[PUT] = 8;
     connections[GET] = 8;
 #endif
-    LOG_debug << clientname << "MegaClient initial max connections: uploads = " << +connections[PUT]
+
+    const auto persistedTransferPreferences = mClientPrefsStore->loadTransferPreferences();
+    for (const auto direction: std::array<direction_t, 2>{GET, PUT})
+    {
+        if (const auto& persistedConnections = persistedTransferPreferences.connection(direction))
+        {
+            connections[direction] = *persistedConnections;
+        }
+    }
+
+    LOG_debug << clientname << "MegaClient max connections: uploads = " << +connections[PUT]
               << ", downloads = " << +connections[GET];
 
     reqtag = 0;
@@ -19272,34 +19286,131 @@ error MegaClient::transferRemoteCopy(File* file,
     return API_OK;
 }
 
-void MegaClient::setmaxconnections(direction_t d, int num)
+namespace
 {
-    if (num > 0)
+bool hasValidMaxConnectionsValue(const int num)
+{
+    if (num <= 0)
     {
-         if ((unsigned int) num > MegaClient::MAX_NUM_CONNECTIONS)
-        {
-            num = MegaClient::MAX_NUM_CONNECTIONS;
-        }
+        LOG_debug << "[MegaClient::setmaxconnections] Invalid value: " << num;
+        return false;
+    }
 
-        if (connections[d] != num)
+    return true;
+}
+} // namespace
+
+void MegaClient::setmaxconnections(const direction_t d, const int num)
+{
+    if (!hasValidMaxConnectionsValue(num))
+        return;
+
+    setmaxconnectionsinternal(
+        d,
+        static_cast<uint8_t>(num > static_cast<int>(MegaClient::MAX_NUM_CONNECTIONS) ?
+                                 MegaClient::MAX_NUM_CONNECTIONS :
+                                 num));
+}
+
+error MegaClient::setmaxconnectionsandpersist(const direction_t d, const uint8_t num)
+{
+    if (!hasValidMaxConnectionsValue(static_cast<int>(num)))
+        return API_EARGS;
+
+    if (const auto retVal = setmaxconnectionsinternal(d, num); retVal != API_OK)
+        return retVal;
+
+    return persistmaxconnections(d, num);
+}
+
+error MegaClient::setmaxconnectionsandpersist(const uint8_t num)
+{
+    if (!hasValidMaxConnectionsValue(static_cast<int>(num)))
+        return API_EARGS;
+
+    if (const auto retVal = setmaxconnectionsinternal(std::nullopt, num); retVal != API_OK)
+        return retVal;
+
+    return persistmaxconnections(std::nullopt, num);
+}
+
+error MegaClient::setmaxconnectionsinternal(const std::optional<direction_t>& direction,
+                                            const uint8_t num)
+{
+    const auto normalizedConnections = std::min(num, MegaClient::MAX_NUM_CONNECTIONS);
+
+    if (direction)
+    {
+        applymaxconnections(*direction, normalizedConnections);
+    }
+    else
+    {
+        applymaxconnections(GET, normalizedConnections);
+        applymaxconnections(PUT, normalizedConnections);
+    }
+    return API_OK;
+}
+
+error MegaClient::persistmaxconnections(const std::optional<direction_t>& direction,
+                                        const uint8_t num)
+{
+    const auto normalizedConnections = std::min(num, MegaClient::MAX_NUM_CONNECTIONS);
+
+    if (!mClientPrefsStore)
+        return API_OK;
+
+    bool saveConnectionsOk{false};
+    if (direction)
+    {
+        saveConnectionsOk = mClientPrefsStore->saveConnection(*direction, normalizedConnections);
+    }
+    else
+    {
+        PersistedTransferPreferences preferences;
+        preferences.setConnection(GET, normalizedConnections);
+        preferences.setConnection(PUT, normalizedConnections);
+        saveConnectionsOk = mClientPrefsStore->saveConnections(preferences);
+    }
+
+    if (saveConnectionsOk)
+    {
+        return API_OK;
+    }
+
+    if (direction)
+    {
+        LOG_warn << "[prefs DB] failed to persist connections[" << connDirectionToStr(*direction)
+                 << "] = " << +normalizedConnections;
+    }
+    else
+    {
+        LOG_warn << "[prefs DB] failed to persist max connections [GET/PUT] = "
+                 << +normalizedConnections;
+    }
+    return API_EWRITE;
+}
+
+void MegaClient::applymaxconnections(const direction_t d, const uint8_t num)
+{
+    if (connections[d] == static_cast<unsigned char>(num))
+    {
+        return;
+    }
+
+    LOG_debug << "[MegaClient::applymaxconnections] Set max parallel " << connDirectionToStr(d)
+              << " connections per transfer to " << +num << " [prev: " << +connections[d] << "]";
+    connections[d] = static_cast<unsigned char>(num);
+    for (transferslot_list::iterator it = tslots.begin(); it != tslots.end();)
+    {
+        TransferSlot* slot = *it++;
+        if (slot->transfer->type == d)
         {
-            LOG_debug << "[MegaClient::setmaxconnections] Set max parallel "
-                      << connDirectionToStr(d) << " connections per transfer to " << num
-                      << " [prev: " << connections[d] << "]";
-            connections[d] = (unsigned char)num;
-            for (transferslot_list::iterator it = tslots.begin(); it != tslots.end(); )
+            slot->transfer->state = TRANSFERSTATE_QUEUED;
+            if (slot->transfer->client->ststatus != STORAGE_RED || slot->transfer->type == GET)
             {
-                TransferSlot *slot = *it++;
-                if (slot->transfer->type == d)
-                {
-                    slot->transfer->state = TRANSFERSTATE_QUEUED;
-                    if (slot->transfer->client->ststatus != STORAGE_RED || slot->transfer->type == GET)
-                    {
-                        slot->transfer->bt.arm();
-                    }
-                    delete slot;
-                }
+                slot->transfer->bt.arm();
             }
+            delete slot;
         }
     }
 }

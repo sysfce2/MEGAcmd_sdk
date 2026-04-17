@@ -1431,9 +1431,13 @@ public:
     
     // run before each test
     void SetUp() override;
+
+protected:
+    virtual void wipePersistedConnectionsDbBeforeTest();
 };
 
 fs::path getLinkExtractSrciptPath();
+void wipePersistedConnectionsDbFilesUnder(const fs::path& root);
 
 // Convenience.
 bool isFileHidden(const LocalPath& path);
@@ -1535,4 +1539,3 @@ public:
 #endif
 
 #endif // TEST_H
-
