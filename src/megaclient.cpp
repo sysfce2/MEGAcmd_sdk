@@ -25214,12 +25214,15 @@ void MegaClient::chooseScParsingMode()
             // will be removed after the SC parsing non-streaming mode is removed.
             if (!isStreamingEnabled() && pendingsc->status == REQ_INFLIGHT)
             {
-                JSON_CHUNK_RECEIVED << pendingsc->getLogName() << "Received chunk "
-                                    << pendingsc->size() << ": "
-                                    << MaxDirectMessage(pendingsc->data(),
-                                                        pendingsc->size(),
-                                                        SimpleLogger::getMaxPayloadLogSize())
-                                    << " (at ds: " << Waiter::ds << ")";
+                JSON_CHUNK_RECEIVED
+                    << pendingsc->getLogName() << "Received chunk " << pendingsc->size()
+                    << " (offset 0/" << pendingsc->contentlength << "): "
+                    << ChunkedDirectMessage{pendingsc->data(),
+                                            pendingsc->size(),
+                                            0,
+                                            static_cast<long long>(pendingsc->contentlength),
+                                            SimpleLogger::getMaxPayloadLogSize()}
+                    << " (at ds: " << Waiter::ds << ")";
             }
 
             enableStreaming();
