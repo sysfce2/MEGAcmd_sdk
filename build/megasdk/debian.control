@@ -6,7 +6,6 @@ Build-Depends:  debhelper,
                 wget,
                 libtool,
                 dh-autoreconf,
-                cdbs,
                 autoconf, autoconf-archive, nasm, cmake
 
 Package: megasdk
