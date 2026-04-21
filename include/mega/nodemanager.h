@@ -552,6 +552,10 @@ public:
 
     void removeNodePendingApplyKeys(const Node* node);
 
+    void setChildScanDbThreshold(size_t threshold);
+
+    size_t getChildScanDbThreshold() const;
+
 private:
     class NoKeyLogger
     {
@@ -614,6 +618,9 @@ private:
 
     // Stores nodes that have been loaded in RAM from DB (not necessarily all of them)
     std::map<NodeHandle, NodeManagerNode> mNodes;
+
+    // If the number of children of a node is greater than this threshold, skip the RAM scan
+    size_t mChildScanDbThreshold{3000};
 
     uint64_t mCacheLRUMaxSize = std::numeric_limits<uint64_t>::max();
     std::list<std::shared_ptr<Node> > mCacheLRU;

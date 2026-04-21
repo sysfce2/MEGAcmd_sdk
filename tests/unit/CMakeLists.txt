@@ -16,6 +16,7 @@ target_sources(test_unit
     AttrMap_test.cpp
     CacheLRU_test.cpp
     canceller_test.cpp
+    ChildNodeLookup_test.cpp
     ChunkMacMap_test.cpp
     Commands_test.cpp
     Crypto_test.cpp
