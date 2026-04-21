@@ -7101,6 +7101,63 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
 - (void)cancelTransfersForDirection:(NSInteger)direction;
 
 /**
+ * @brief Set the maximum number of connections per transfer for a specific direction.
+ *
+ * The maximum number of allowed connections is 100. If a higher number of connections is
+ * passed to this function, it will fail with the error code MEGAErrorTypeApiETooMany.
+ *
+ * The associated request type with this request is MEGARequestTypeSetMaxConnections.
+ * Valid data in the MEGARequest object received on callbacks:
+ * - [MEGARequest paramType] - Returns the value for direction parameter
+ * - [MEGARequest number] - Returns the number of connections
+ *
+ * @param direction Direction of transfers (MEGATransferTypeDownload or MEGATransferTypeUpload).
+ * @param connections Maximum number of connections (between 1 and 100).
+ * @param delegate Delegate to track this request.
+ */
+- (void)setMaxConnectionsForDirection:(MEGATransferType)direction connections:(NSInteger)connections delegate:(id<MEGARequestDelegate>)delegate;
+
+/**
+ * @brief Set the maximum number of connections per transfer for a specific direction.
+ *
+ * The maximum number of allowed connections is 100. If a higher number of connections is
+ * passed to this function, it will fail with the error code MEGAErrorTypeApiETooMany.
+ *
+ * The associated request type with this request is MEGARequestTypeSetMaxConnections.
+ * Valid data in the MEGARequest object received on callbacks:
+ * - [MEGARequest paramType] - Returns the value for direction parameter
+ * - [MEGARequest number] - Returns the number of connections
+ *
+ * @param direction Direction of transfers (MEGATransferTypeDownload or MEGATransferTypeUpload).
+ * @param connections Maximum number of connections (between 1 and 100).
+ */
+- (void)setMaxConnectionsForDirection:(MEGATransferType)direction connections:(NSInteger)connections;
+
+/**
+ * @brief Get the maximum number of connections per upload transfer.
+ *
+ * The associated request type with this request is MEGARequestTypeGetMaxConnections.
+ * Valid data in the MEGARequest object received on callbacks:
+ * - [MEGARequest paramType] - Returns the value for transfer direction (PUT)
+ * - [MEGARequest number] - Returns the max number of connections for uploads.
+ *
+ * @param delegate Delegate to track this request.
+ */
+- (void)getMaxUploadConnectionsWithDelegate:(id<MEGARequestDelegate>)delegate;
+
+/**
+ * @brief Get the maximum number of connections per download transfer.
+ *
+ * The associated request type with this request is MEGARequestTypeGetMaxConnections.
+ * Valid data in the MEGARequest object received on callbacks:
+ * - [MEGARequest paramType] - Returns the value for transfer direction (GET)
+ * - [MEGARequest number] - Returns the max number of connections for downloads.
+ *
+ * @param delegate Delegate to track this request.
+ */
+- (void)getMaxDownloadConnectionsWithDelegate:(id<MEGARequestDelegate>)delegate;
+
+/**
  * @brief Cancel the transfer with a specific tag
  *
  * When a transfer is cancelled, it will finish and will provide the error code

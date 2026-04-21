@@ -2764,6 +2764,30 @@ using namespace mega;
     }
 }
 
+- (void)setMaxConnectionsForDirection:(MEGATransferType)direction connections:(NSInteger)connections delegate:(id<MEGARequestDelegate>)delegate {
+    if (self.megaApi) {
+        self.megaApi->setMaxConnections((int)direction, (int)connections, [self createDelegateMEGARequestListener:delegate singleListener:YES]);
+    }
+}
+
+- (void)setMaxConnectionsForDirection:(MEGATransferType)direction connections:(NSInteger)connections {
+    if (self.megaApi) {
+        self.megaApi->setMaxConnections((int)direction, (int)connections);
+    }
+}
+
+- (void)getMaxUploadConnectionsWithDelegate:(id<MEGARequestDelegate>)delegate {
+    if (self.megaApi) {
+        self.megaApi->getMaxUploadConnections([self createDelegateMEGARequestListener:delegate singleListener:YES]);
+    }
+}
+
+- (void)getMaxDownloadConnectionsWithDelegate:(id<MEGARequestDelegate>)delegate {
+    if (self.megaApi) {
+        self.megaApi->getMaxDownloadConnections([self createDelegateMEGARequestListener:delegate singleListener:YES]);
+    }
+}
+
 - (void)cancelTransferByTag:(NSInteger)transferTag delegate:(id<MEGARequestDelegate>)delegate {
     if (self.megaApi) {
         self.megaApi->cancelTransferByTag((int)transferTag, [self createDelegateMEGARequestListener:delegate singleListener:YES]);
