@@ -19,19 +19,97 @@
  * program.
  */
 #include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <megaapi.h>
+#include <mutex>
+#include <string>
 #include <thread>
 #include <time.h>
 
-// ENTER YOUR CREDENTIALS HERE
-#define MEGA_EMAIL "EMAIL"
-#define MEGA_PASSWORD "PASSWORD"
-// Get yours for free at https://mega.io/developers#source-code
+// Credentials are read from the MEGA_EMAIL and MEGA_PWD environment variables.
+// Get your APP_KEY for free at https://mega.io/developers#source-code
 #define APP_KEY "9gETCbhB"
 #define USER_AGENT "Simple-Client example app"
 
 using namespace mega;
+
+namespace
+{
+
+const char* logLevelName(int level)
+{
+    switch (level)
+    {
+        case MegaApi::LOG_LEVEL_FATAL:
+            return "FATAL";
+        case MegaApi::LOG_LEVEL_ERROR:
+            return "ERROR";
+        case MegaApi::LOG_LEVEL_WARNING:
+            return "WARN ";
+        case MegaApi::LOG_LEVEL_INFO:
+            return "INFO ";
+        case MegaApi::LOG_LEVEL_DEBUG:
+            return "DEBUG";
+        case MegaApi::LOG_LEVEL_VERBOSE:
+            return "VERB ";
+        default:
+            return "?????";
+    }
+}
+
+class SimpleClientLogger: public MegaLogger
+{
+public:
+    SimpleClientLogger(const std::string& path, bool alsoStdout):
+        mStream(path, std::ios::app),
+        mAlsoStdout(alsoStdout)
+    {
+        if (!mStream)
+        {
+            std::cerr << "SimpleClientLogger: failed to open " << path << std::endl;
+        }
+    }
+
+    void log(const char* time,
+             int loglevel,
+             const char* source,
+             const char* message
+#ifdef ENABLE_LOG_PERFORMANCE
+             ,
+             const char** /*directMessages*/ = nullptr,
+             size_t* /*directMessagesSizes*/ = nullptr,
+             int /*numberMessages*/ = 0
+#endif
+             ) override
+    {
+        std::lock_guard<std::mutex> lk(mMutex);
+
+        auto write = [&](std::ostream& os)
+        {
+            os << (time ? time : "") << ' ' << logLevelName(loglevel) << ' '
+               << (source ? source : "") << " | " << (message ? message : "") << '\n';
+        };
+
+        if (mStream)
+        {
+            write(mStream);
+            mStream.flush();
+        }
+        if (mAlsoStdout)
+        {
+            write(std::cout);
+        }
+    }
+
+private:
+    std::ofstream mStream;
+    bool mAlsoStdout;
+    std::mutex mMutex;
+};
+
+} // namespace
 
 class MyListener: public MegaListener
 {
@@ -177,12 +255,16 @@ std::string displayTime(time_t t)
 
 int main()
 {
+    // Route SDK logs to a file (tee to stdout). Override the path with MEGA_LOG_FILE.
+    const char* envLogPath = std::getenv("MEGA_LOG_FILE");
+    const std::string logFilePath = (envLogPath && *envLogPath) ? envLogPath : "simple_client.log";
+
+    static SimpleClientLogger fileLogger(logFilePath, /*alsoStdout=*/true);
+    MegaApi::addLoggerObject(&fileLogger, /*singleExclusiveLogger=*/true);
+    MegaApi::setLogLevel(MegaApi::LOG_LEVEL_INFO);
+
     // Check the documentation of MegaApi to know how to enable local caching
     MegaApi* megaApi = new MegaApi(APP_KEY, ".", USER_AGENT);
-
-    // By default, logs are sent to stdout
-    // You can use MegaApi::setLoggerObject to receive SDK logs in your app
-    megaApi->setLogLevel(MegaApi::LOG_LEVEL_INFO);
 
     MyListener listener;
 
@@ -190,17 +272,17 @@ int main()
     // It is also possible to register a different listener per request/transfer
     megaApi->addListener(&listener);
 
-    if (std::string{MEGA_EMAIL} == "EMAIL")
+    const char* envEmail = std::getenv("MEGA_EMAIL");
+    const char* envPassword = std::getenv("MEGA_PWD");
+    if (!envEmail || !*envEmail || !envPassword || !*envPassword)
     {
-        std::cout << "Please enter your email/password at the top of simple_client.cpp"
+        std::cerr << "Set the MEGA_EMAIL and MEGA_PWD environment variables before running."
                   << std::endl;
-        std::cout << "Press Enter to exit the app..." << std::endl;
-        getchar();
-        return 0;
+        return 1;
     }
 
     // Login. You can get the result in the onRequestFinish callback of your listener
-    megaApi->login(MEGA_EMAIL, MEGA_PASSWORD);
+    megaApi->login(envEmail, envPassword);
 
     // You can use the main thread to show a GUI or anything else. MegaApi runs in a background
     // thread.
