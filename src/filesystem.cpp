@@ -48,6 +48,17 @@ namespace mega
 {
 std::atomic<int> FileSystemAccess::mMinimumDirectoryPermissions{0700};
 std::atomic<int> FileSystemAccess::mMinimumFilePermissions{0600};
+std::atomic<bool> FileSystemAccess::mUsePlatformAvailableDiskSpaceQuery{false};
+
+void FileSystemAccess::setUsePlatformAvailableDiskSpaceQuery(bool enable)
+{
+    mUsePlatformAvailableDiskSpaceQuery.store(enable, std::memory_order_relaxed);
+}
+
+bool FileSystemAccess::usePlatformAvailableDiskSpaceQuery()
+{
+    return mUsePlatformAvailableDiskSpaceQuery.load(std::memory_order_relaxed);
+}
 
 CodeCounter::ScopeStats g_compareUtfTimings("compareUtfTimings");
 

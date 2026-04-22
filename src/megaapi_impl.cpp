@@ -13082,6 +13082,19 @@ void MegaApiImpl::setPublicKeyPinning(bool enable)
     client->httpio->disablepkp = !enable;
 }
 
+// No SdkMutexGuard on this setter/getter pair: the underlying storage is
+// std::atomic<bool>, and the flag is independent of any client-side state
+// protected by sdkMutex.
+void MegaApiImpl::setUsePlatformAvailableDiskSpaceQuery(bool enable)
+{
+    FileSystemAccess::setUsePlatformAvailableDiskSpaceQuery(enable);
+}
+
+bool MegaApiImpl::usePlatformAvailableDiskSpaceQuery() const
+{
+    return FileSystemAccess::usePlatformAvailableDiskSpaceQuery();
+}
+
 void MegaApiImpl::pauseActionPackets()
 {
     SdkMutexGuard g(sdkMutex);

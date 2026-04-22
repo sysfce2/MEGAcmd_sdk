@@ -119,5 +119,40 @@ TEST_F(FileAccessTests, fread)
     EXPECT_EQ(computed, std::string("CD\0\0\0\0\0\0", 8));
 }
 
+struct PlatformAvailableDiskSpaceGuard
+{
+    const bool previous{FileSystemAccess::usePlatformAvailableDiskSpaceQuery()};
+
+    ~PlatformAvailableDiskSpaceGuard()
+    {
+        FileSystemAccess::setUsePlatformAvailableDiskSpaceQuery(previous);
+    }
+};
+
+TEST(FileSystemAccessSwitch, DefaultsToDisabled)
+{
+    PlatformAvailableDiskSpaceGuard guard;
+
+    FileSystemAccess::setUsePlatformAvailableDiskSpaceQuery(false);
+    EXPECT_FALSE(FileSystemAccess::usePlatformAvailableDiskSpaceQuery());
+
+    FileSystemAccess::setUsePlatformAvailableDiskSpaceQuery(true);
+    EXPECT_TRUE(FileSystemAccess::usePlatformAvailableDiskSpaceQuery());
+}
+
+TEST(FileSystemAccessAvailableDiskSpace, SwitchOffReturnsPositive)
+{
+    PlatformAvailableDiskSpaceGuard guard;
+
+    FSACCESS_CLASS fs;
+    const auto path = LocalPath::fromAbsolutePath(std::filesystem::temp_directory_path().string());
+
+    FileSystemAccess::setUsePlatformAvailableDiskSpaceQuery(false);
+    const auto off = fs.availableDiskSpace(path);
+
+    EXPECT_GT(off, 0);
+    EXPECT_LT(off, std::numeric_limits<m_off_t>::max());
+}
+
 } // testing
 } // mega

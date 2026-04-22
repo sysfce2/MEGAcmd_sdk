@@ -856,6 +856,14 @@ struct MEGA_API FileSystemAccess : public EventTrigger
     // Specify the minimum permissions for newly created files.
     static void setMinimumFilePermissions(int permissions);
 
+    // Whether availableDiskSpace() should prefer a platform-native query
+    // (currently Foundation's volumeAvailableCapacityForImportantUsageKey on
+    // iOS) over the default statfs path. Off by default; no-op on platforms
+    // without a native query implementation. Process-wide: affects every
+    // FileSystemAccess instance in the same process.
+    static void setUsePlatformAvailableDiskSpaceQuery(bool enable);
+    static bool usePlatformAvailableDiskSpaceQuery();
+
     // return a description of OS error,
     // errno on unix. Defaults to the number itself.
     static std::string getErrorMessage(int error);
@@ -902,6 +910,9 @@ protected:
 
     // Specifies the minimum permissions allowed for files.
     static std::atomic<int> mMinimumFilePermissions;
+
+    // Toggles the platform-native availableDiskSpace path (see setter).
+    static std::atomic<bool> mUsePlatformAvailableDiskSpaceQuery;
 
     /**
      * @brief Expands a LocalPath to its canonical absolute form.

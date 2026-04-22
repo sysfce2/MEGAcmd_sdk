@@ -3448,6 +3448,16 @@ using namespace mega;
     }
 }
 
+- (void)setUsePlatformAvailableDiskSpaceQuery:(BOOL)enable {
+    if (self.megaApi) {
+        self.megaApi->setUsePlatformAvailableDiskSpaceQuery(enable);
+    }
+}
+
+- (BOOL)usePlatformAvailableDiskSpaceQuery {
+    return self.megaApi ? self.megaApi->usePlatformAvailableDiskSpaceQuery() : NO;
+}
+
 - (BOOL)createThumbnail:(NSString *)imagePath destinatioPath:(NSString *)destinationPath {
     if (imagePath == nil || destinationPath == nil || self.megaApi == nil) return NO;
     

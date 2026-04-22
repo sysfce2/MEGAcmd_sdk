@@ -142,3 +142,54 @@ void getOSXproxy(Proxy* proxy)
     CFRelease(proxySettings);
 }
 #endif
+
+#if TARGET_OS_IPHONE
+std::optional<std::int64_t> availableDiskSpaceForImportantUsage(const std::string& path)
+{
+    if (path.empty())
+    {
+        LOG_warn << "availableDiskSpaceForImportantUsage: empty path";
+        return std::nullopt;
+    }
+
+    @autoreleasepool
+    {
+        NSString* pathString = [NSString stringWithUTF8String:path.c_str()];
+        if (pathString == nil)
+        {
+            LOG_warn
+                << "availableDiskSpaceForImportantUsage: NSString conversion failed (non-UTF-8 path?) for "
+                << path;
+            return std::nullopt;
+        }
+
+        NSURL* url = [NSURL fileURLWithPath:pathString isDirectory:YES];
+        if (url == nil)
+        {
+            LOG_warn << "availableDiskSpaceForImportantUsage: failed to build file URL for "
+                      << path;
+            return std::nullopt;
+        }
+
+        NSError* error = nil;
+        NSDictionary<NSURLResourceKey, id>* values =
+            [url resourceValuesForKeys:@[NSURLVolumeAvailableCapacityForImportantUsageKey]
+                                 error:&error];
+        if (!values)
+        {
+            LOG_warn << "availableDiskSpaceForImportantUsage: query failed for " << path << ": "
+                      << (error ? [[error localizedDescription] UTF8String] : "unknown");
+            return std::nullopt;
+        }
+
+        NSNumber* bytes = values[NSURLVolumeAvailableCapacityForImportantUsageKey];
+        if (!bytes)
+        {
+            LOG_warn << "availableDiskSpaceForImportantUsage: key unavailable for " << path;
+            return std::nullopt;
+        }
+
+        return static_cast<std::int64_t>([bytes longLongValue]);
+    }
+}
+#endif

@@ -20935,6 +20935,35 @@ class MegaApi
         void setPublicKeyPinning(bool enable);
 
         /**
+         * @brief Enable / disable the platform-native available-disk-space query.
+         *
+         * When enabled on iOS, availableDiskSpace() uses Foundation's
+         * NSURLVolumeAvailableCapacityForImportantUsageKey, which accounts for
+         * purgeable storage the system can reclaim for user-requested
+         * downloads. When disabled, or on platforms without a native
+         * implementation, the SDK uses the default statfs-based path.
+         *
+         * This setting is currently only effective on iOS. On other platforms
+         * (macOS, Linux, Windows, Android) the setter is accepted but has no
+         * runtime effect.
+         *
+         * Disabled by default. The setting is process-wide: it affects every
+         * MegaApi instance in the same process.
+         *
+         * @param enable true to use the platform-native query on supported
+         * platforms, false to always use the default path.
+         */
+        void setUsePlatformAvailableDiskSpaceQuery(bool enable);
+
+        /**
+         * @brief Returns whether the platform-native available-disk-space
+         * query is enabled.
+         *
+         * @see MegaApi::setUsePlatformAvailableDiskSpaceQuery
+         */
+        bool usePlatformAvailableDiskSpaceQuery() const;
+
+        /**
          * @brief Pause the reception of action packets
          *
          * This function is intended to help apps to initialize themselves
