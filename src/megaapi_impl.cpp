@@ -7421,7 +7421,8 @@ void MegaApiImpl::setLogToConsole(bool enable)
 
 void MegaApiImpl::setLogJSONContent(bool enable)
 {
-    JSONLog::set(JSONLog::CHUNK_CONSUMED | JSONLog::SENDING | JSONLog::NONCHUNK_RECEIVED);
+    JSONLog::set(JSONLog::CHUNK_RECEIVED | JSONLog::CHUNK_CONSUMED | JSONLog::SENDING |
+                 JSONLog::NONCHUNK_RECEIVED);
 
     if (enable)
         SimpleLogger::setMaxPayloadLogSize(0); // Max size

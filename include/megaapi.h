@@ -13608,7 +13608,7 @@ class MegaApi
          *   Disable all JSON logging if no other flags are set
          *
          * - MegaApi::JSON_LOG_CHUNK_RECEIVED = 1
-         *   Enable logging of received JSON chunked data
+         *   Enable logging of received JSON chunked data (enabled by default)
          *   @see MegaApi::setMaxPayloadLogSize for size limits
          *
          * - MegaApi::JSON_LOG_CHUNK_PROCESSING = 2

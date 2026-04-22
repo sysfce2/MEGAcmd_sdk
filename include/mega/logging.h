@@ -89,6 +89,7 @@
 */
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -171,6 +172,21 @@ public:
     {
         return mConstChar;
     }
+};
+
+// Describes one chunk of a larger streamed body for logging. If the total body size
+// (totalSize) exceeds maxLogSize, SimpleLogger will only emit the slices of this chunk that
+// overlap with the head window [0, maxLogSize/2) and tail window [totalSize - maxLogSize/2,
+// totalSize); bytes in between are replaced by a "[...]" marker. If totalSize is negative
+// (unknown), only the head window is emitted. If totalSize <= maxLogSize, the full chunk is
+// emitted.
+struct ChunkedDirectMessage
+{
+    const char* data;
+    size_t chunkSize;
+    size_t chunkOffset;
+    int64_t totalSize;
+    size_t maxLogSize;
 };
 
 class SimpleLogger
@@ -676,6 +692,66 @@ public:
         return *this;
     }
 
+    SimpleLogger& operator<<(const ChunkedDirectMessage& obj)
+    {
+        // 1. Handle Unknown Size
+        if (obj.totalSize < 0)
+        {
+            if (obj.chunkOffset >= obj.maxLogSize)
+            {
+                return *this << "[...]";
+            }
+            size_t len = std::min(obj.chunkSize, obj.maxLogSize - obj.chunkOffset);
+            *this << DirectMessage(obj.data, len);
+            if (len < obj.chunkSize)
+            {
+                *this << "[...]";
+            }
+            return *this;
+        }
+
+        // 2. Handle Small Data (No need to truncate)
+        if (static_cast<size_t>(obj.totalSize) <= obj.maxLogSize)
+        {
+            return *this << DirectMessage(obj.data, obj.chunkSize);
+        }
+
+        // 3. Handle Truncation (Head + Tail)
+        const size_t headEnd = obj.maxLogSize / 2;
+        const size_t tailStart = static_cast<size_t>(obj.totalSize) - obj.maxLogSize / 2;
+
+        // Helper to calculate overlap
+        auto getOverlap = [&](size_t start, size_t end) -> std::pair<size_t, size_t>
+        {
+            size_t s = std::max(obj.chunkOffset, start);
+            size_t e = std::min(obj.chunkOffset + obj.chunkSize, end);
+            return (s < e) ? std::make_pair(s - obj.chunkOffset, e - s) :
+                             std::make_pair((size_t)0, (size_t)0);
+        };
+
+        auto [hOff, hLen] = getOverlap(0, headEnd);
+        auto [tOff, tLen] = getOverlap(tailStart, static_cast<size_t>(obj.totalSize));
+
+        if (hLen > 0)
+        {
+            *this << DirectMessage(obj.data + hOff, hLen);
+        }
+
+        // Emit "[...]" if any byte of this chunk lies in the middle gap [headEnd, tailStart).
+        const size_t chunkEnd = obj.chunkOffset + obj.chunkSize;
+        if (std::max(obj.chunkOffset, headEnd) < std::min(chunkEnd, tailStart))
+        {
+            *this << "[...]";
+        }
+
+        if (tLen > 0)
+        {
+            *this << DirectMessage(obj.data + tOff, tLen);
+        }
+
+        return *this;
+    }
+
     // set output class
     static void setOutputClass(Logger *logger_class)
     {
@@ -971,7 +1047,8 @@ public:
     }
 
 private:
-    inline static std::atomic_uint32_t mJSONLog{CHUNK_CONSUMED | SENDING | NONCHUNK_RECEIVED};
+    inline static std::atomic_uint32_t mJSONLog{CHUNK_RECEIVED | CHUNK_CONSUMED | SENDING |
+                                                NONCHUNK_RECEIVED};
 };
 
 #define JSON_CHUNK_RECEIVED \

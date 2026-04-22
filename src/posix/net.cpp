@@ -1754,11 +1754,17 @@ size_t CurlHttpIO::write_data(void* ptr, size_t size, size_t nmemb, void* target
             // consumed immediately upon receipt, avoiding duplicate logging.
             if (req->mChunked)
             {
-                JSON_CHUNK_RECEIVED << req->getLogName() << "Received chunk " << len << ": "
-                                    << MaxDirectMessage(static_cast<const char*>(ptr),
-                                                        static_cast<size_t>(len),
-                                                        SimpleLogger::getMaxPayloadLogSize())
-                                    << " (at ds: " << Waiter::ds << ")";
+                const size_t chunkOffset =
+                    static_cast<size_t>(req->bufpos) - static_cast<size_t>(len);
+                JSON_CHUNK_RECEIVED
+                    << req->getLogName() << "Received chunk " << len << " (offset " << chunkOffset
+                    << "/" << req->contentlength << "): "
+                    << ChunkedDirectMessage{static_cast<const char*>(ptr),
+                                            static_cast<size_t>(len),
+                                            chunkOffset,
+                                            static_cast<long long>(req->contentlength),
+                                            SimpleLogger::getMaxPayloadLogSize()}
+                    << " (at ds: " << Waiter::ds << ")";
             }
         }
 
