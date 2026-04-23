@@ -308,5 +308,13 @@ int main()
 
     std::cout << "Press Enter to exit the app..." << std::endl;
     getchar();
+
+#ifdef HAVE_LIBUV
+    megaApi->httpServerStop();
+#endif
+
+    megaApi->removeListener(&listener);
+    delete megaApi;
+    MegaApi::removeLoggerObject(&fileLogger);
     return 0;
 }
