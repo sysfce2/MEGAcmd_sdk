@@ -22,3 +22,9 @@ SDK logs are written to `./simple_client.log` by default, in append mode, and ar
 ```
 MEGA_LOG_FILE=/tmp/streaming-test.log ./simple_client
 ```
+
+Disable the stdout tee with `MEGA_LOG_STDOUT=0` (also accepts `false`):
+
+```
+MEGA_LOG_STDOUT=0 ./simple_client
+```

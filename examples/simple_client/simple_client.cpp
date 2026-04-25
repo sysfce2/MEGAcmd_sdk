@@ -18,7 +18,10 @@
  * You should have received a copy of the license along with this
  * program.
  */
+#include <mega/log_level.h>
+
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -38,33 +41,12 @@ using namespace mega;
 namespace
 {
 
-const char* logLevelName(int level)
-{
-    switch (level)
-    {
-        case MegaApi::LOG_LEVEL_FATAL:
-            return "FATAL";
-        case MegaApi::LOG_LEVEL_ERROR:
-            return "ERROR";
-        case MegaApi::LOG_LEVEL_WARNING:
-            return "WARN ";
-        case MegaApi::LOG_LEVEL_INFO:
-            return "INFO ";
-        case MegaApi::LOG_LEVEL_DEBUG:
-            return "DEBUG";
-        case MegaApi::LOG_LEVEL_VERBOSE:
-            return "VERB ";
-        default:
-            return "?????";
-    }
-}
-
 class SimpleClientLogger: public MegaLogger
 {
 public:
-    SimpleClientLogger(const std::string& path, bool alsoStdout):
+    SimpleClientLogger(const std::string& path, bool logToStdout):
         mStream(path, std::ios::app),
-        mAlsoStdout(alsoStdout)
+        mLogToStdout(logToStdout)
     {
         if (!mStream)
         {
@@ -72,24 +54,61 @@ public:
         }
     }
 
-    void log(const char* time,
+    void log(const char* /*time*/,
              int loglevel,
              const char* source,
              const char* message
 #ifdef ENABLE_LOG_PERFORMANCE
              ,
-             const char** /*directMessages*/ = nullptr,
-             size_t* /*directMessagesSizes*/ = nullptr,
-             int /*numberMessages*/ = 0
+             const char** directMessages = nullptr,
+             size_t* directMessagesSizes = nullptr,
+             int numberMessages = 0
 #endif
              ) override
     {
         std::lock_guard<std::mutex> lk(mMutex);
 
+        // Build HH:MM:SS.mmm timestamp ourselves to match MegaCLILogger's format.
+        using namespace std::chrono;
+        const auto now = system_clock::now();
+        const auto t = system_clock::to_time_t(now);
+        const auto ms = duration_cast<milliseconds>(now.time_since_epoch()).count() % 1000;
+        char hms[16];
+        std::strftime(hms, sizeof(hms), "%H:%M:%S", std::localtime(&t));
+        char timestamp[32];
+        std::snprintf(timestamp, sizeof(timestamp), "%s.%03lld", hms, static_cast<long long>(ms));
+
+        // Left-pad the level name to 7 chars (longest is "WARNING"/"VERBOSE")
+        // so log columns line up.
+        char level[8];
+        std::snprintf(level, sizeof(level), "%-7s", toString(static_cast<LogLevel>(loglevel)));
+
+        std::string s;
+        s.reserve(1024);
+        s += '[';
+        s += timestamp;
+        s += "] ";
+        s += level;
+        s += " | ";
+        if (message)
+            s += message;
+#ifdef ENABLE_LOG_PERFORMANCE
+        for (int i = 0; i < numberMessages; ++i)
+        {
+            s.append(directMessages[i], directMessagesSizes[i]);
+        }
+#endif
+        if (source && *source != '\0')
+        {
+            s += " [";
+            s += source;
+            s += "]";
+        }
+        s += '\n';
+
         auto write = [&](std::ostream& os)
         {
-            os << (time ? time : "") << ' ' << logLevelName(loglevel) << ' '
-               << (source ? source : "") << " | " << (message ? message : "") << '\n';
+            os << s;
         };
 
         if (mStream)
@@ -97,7 +116,7 @@ public:
             write(mStream);
             mStream.flush();
         }
-        if (mAlsoStdout)
+        if (mLogToStdout)
         {
             write(std::cout);
         }
@@ -105,7 +124,7 @@ public:
 
 private:
     std::ofstream mStream;
-    bool mAlsoStdout;
+    bool mLogToStdout;
     std::mutex mMutex;
 };
 
@@ -255,11 +274,16 @@ std::string displayTime(time_t t)
 
 int main()
 {
-    // Route SDK logs to a file (tee to stdout). Override the path with MEGA_LOG_FILE.
+    // Route SDK logs to a file. Override the path with MEGA_LOG_FILE.
     const char* envLogPath = std::getenv("MEGA_LOG_FILE");
     const std::string logFilePath = (envLogPath && *envLogPath) ? envLogPath : "simple_client.log";
 
-    static SimpleClientLogger fileLogger(logFilePath, /*alsoStdout=*/true);
+    // Tee logs to stdout by default. Disable with MEGA_LOG_STDOUT=0 (or =false).
+    const char* envStdout = std::getenv("MEGA_LOG_STDOUT");
+    const bool logToStdout = !envStdout || *envStdout == '\0' ||
+                             (envStdout[0] != '0' && envStdout[0] != 'f' && envStdout[0] != 'F');
+
+    static SimpleClientLogger fileLogger(logFilePath, logToStdout);
     MegaApi::addLoggerObject(&fileLogger, /*singleExclusiveLogger=*/true);
     MegaApi::setLogLevel(MegaApi::LOG_LEVEL_INFO);
 
