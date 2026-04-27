@@ -7032,10 +7032,22 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
  * The associated request type with this request is MEGARequestTypeSetMaxConnections.
  * Valid data in the MEGARequest object received on callbacks:
  * - [MEGARequest paramType] - Returns the value for direction parameter
- * - [MEGARequest number] - Returns the number of connections
+ * - [MEGARequest number] - Returns the requested value for connections
  *
- * @param direction Direction of transfers (MEGATransferTypeDownload or MEGATransferTypeUpload).
- * @param connections Maximum number of connections (between 1 and 100).
+ * Possible error codes on request finish are:
+ * - MEGAErrorTypeApiEArgs if direction is invalid or connections is smaller than 1
+ * - MEGAErrorTypeApiETooMany if connections is greater than 100
+ * - MEGAErrorTypeApiEWrite if the live value was updated but the new
+ *   persisted value could not be stored
+ *
+ * The value is persisted per SDK base path and restored on subsequent
+ * SDK instances.
+ *
+ * @param direction Direction of transfers.
+ * Valid values for this parameter are:
+ * - MEGATransferTypeDownload
+ * - MEGATransferTypeUpload
+ * @param connections Maximum number of connections (it should be between 1 and 100).
  * @param delegate Delegate to track this request.
  */
 - (void)setMaxConnectionsForDirection:(MEGATransferType)direction connections:(NSInteger)connections delegate:(id<MEGARequestDelegate>)delegate;
@@ -7049,10 +7061,22 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
  * The associated request type with this request is MEGARequestTypeSetMaxConnections.
  * Valid data in the MEGARequest object received on callbacks:
  * - [MEGARequest paramType] - Returns the value for direction parameter
- * - [MEGARequest number] - Returns the number of connections
+ * - [MEGARequest number] - Returns the requested value for connections
  *
- * @param direction Direction of transfers (MEGATransferTypeDownload or MEGATransferTypeUpload).
- * @param connections Maximum number of connections (between 1 and 100).
+ * Possible error codes on request finish are:
+ * - MEGAErrorTypeApiEArgs if direction is invalid or connections is smaller than 1
+ * - MEGAErrorTypeApiETooMany if connections is greater than 100
+ * - MEGAErrorTypeApiEWrite if the live value was updated but the new
+ *   persisted value could not be stored
+ *
+ * The value is persisted per SDK base path and restored on subsequent
+ * SDK instances.
+ *
+ * @param direction Direction of transfers.
+ * Valid values for this parameter are:
+ * - MEGATransferTypeDownload
+ * - MEGATransferTypeUpload
+ * @param connections Maximum number of connections (it should be between 1 and 100).
  */
 - (void)setMaxConnectionsForDirection:(MEGATransferType)direction connections:(NSInteger)connections;
 
