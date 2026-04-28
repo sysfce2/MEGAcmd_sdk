@@ -4564,6 +4564,8 @@ public:
 
         void retrySSLerrors(bool enable);
         void setPublicKeyPinning(bool enable);
+        void setUsePlatformAvailableDiskSpaceQuery(bool enable);
+        bool usePlatformAvailableDiskSpaceQuery() const;
         void pauseActionPackets();
         void resumeActionPackets();
 

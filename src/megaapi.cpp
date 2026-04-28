@@ -4542,6 +4542,16 @@ void MegaApi::setPublicKeyPinning(bool enable)
     pImpl->setPublicKeyPinning(enable);
 }
 
+void MegaApi::setUsePlatformAvailableDiskSpaceQuery(bool enable)
+{
+    pImpl->setUsePlatformAvailableDiskSpaceQuery(enable);
+}
+
+bool MegaApi::usePlatformAvailableDiskSpaceQuery() const
+{
+    return pImpl->usePlatformAvailableDiskSpaceQuery();
+}
+
 void MegaApi::pauseActionPackets()
 {
     pImpl->pauseActionPackets();

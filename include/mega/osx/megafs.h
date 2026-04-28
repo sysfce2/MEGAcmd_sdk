@@ -42,6 +42,8 @@ public:
     
     int checkevents(Waiter* waiter) override;
 
+    m_off_t availableDiskSpace(const LocalPath& drivePath) override;
+
 #ifdef ENABLE_SYNC
     bool initFilesystemNotificationSystem() override;
 

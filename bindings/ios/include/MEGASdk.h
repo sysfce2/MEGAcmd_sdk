@@ -8425,6 +8425,29 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
 - (void)setPublicKeyPinning:(BOOL)enable;
 
 /**
+ * @brief Enable / disable the platform-native available-disk-space query.
+ *
+ * When enabled on iOS, the SDK uses Foundation's
+ * NSURLVolumeAvailableCapacityForImportantUsageKey for disk-space checks,
+ * which accounts for purgeable storage the system can reclaim for
+ * user-requested downloads. When disabled, the SDK uses its default
+ * statfs-based path.
+ *
+ * Disabled by default. The setting is process-wide: it affects every
+ * MEGASdk instance in the same process.
+ *
+ * @param enable YES to use the platform-native query, NO to always use the
+ * default path.
+ */
+- (void)setUsePlatformAvailableDiskSpaceQuery:(BOOL)enable;
+
+/**
+ * @brief Returns whether the platform-native available-disk-space query is
+ * enabled.
+ */
+- (BOOL)usePlatformAvailableDiskSpaceQuery;
+
+/**
  * @brief Create a thumbnail for an image
  * @param imagePath Image path
  * @param destinationPath Destination path for the thumbnail (including the file name)
