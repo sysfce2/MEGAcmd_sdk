@@ -30,6 +30,8 @@ protected:
     public:
         Arguments(const std::string& name);
 
+        ~Arguments();
+
         fuse_args* get();
     }; // Arguments
 
