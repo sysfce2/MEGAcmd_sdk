@@ -859,6 +859,44 @@ fs::path makeReusableClientFolder(const string& subfolder)
     return p;
 }
 
+namespace
+{
+bool isPersistConnectionsPrefsDbFile(const std::string& name)
+{
+    static const std::string kPrefix = "megaclient_statecache";
+    return name.find("_prefs") != std::string::npos &&
+           name.compare(0, kPrefix.size(), kPrefix) == 0;
+}
+} // namespace
+
+void wipePersistedConnectionsDbFilesUnder(const fs::path& root)
+{
+    std::error_code ec;
+    if (!fs::exists(root, ec))
+    {
+        return;
+    }
+
+    for (fs::recursive_directory_iterator it(root, ec), end; it != end; it.increment(ec))
+    {
+        if (ec)
+        {
+            break;
+        }
+
+        const auto name = it->path().filename().string();
+        if (isPersistConnectionsPrefsDbFile(name))
+        {
+            std::error_code rmEc;
+            fs::remove(it->path(), rmEc);
+        }
+    }
+}
+
+void SdkTestBase::wipePersistedConnectionsDbBeforeTest()
+{
+    wipePersistedConnectionsDbFilesUnder(TestFS::GetProcessFolder());
+}
 
 bool SdkTestBase::clearProcessFolderEachTest = false;
 
@@ -873,6 +911,10 @@ void SdkTestBase::SetUp()
         // for testing that tests are independent, slow as NOD database deleted
         TestFS::ClearProcessFolder();
     }
+
+    // Keep integration tests on platform defaults for connections by removing
+    // any persisted prefs DB files under this process folder before each test.
+    wipePersistedConnectionsDbBeforeTest();
 
     // Reset request retry statistics.
     RequestRetryRecorder::instance().reset();
@@ -891,4 +933,3 @@ bool isFileHidden(const fs::path& path)
 {
     return isFileHidden(LocalPath::fromAbsolutePath(path_u8string(path)));
 }
-

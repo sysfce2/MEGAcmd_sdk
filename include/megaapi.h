@@ -17634,13 +17634,22 @@ class MegaApi
          * The associated request type with this request is MegaRequest::TYPE_SET_MAX_CONNECTIONS
          * Valid data in the MegaRequest object received on callbacks:
          * - MegaRequest::getParamType - Returns the value for \c direction parameter
-         * - MegaRequest::getNumber - Returns the number of \c connections
+         * - MegaRequest::getNumber - Returns the requested value for \c connections
+         *
+         * Possible error codes on request finish are:
+         * - MegaError::API_EARGS if \c direction is invalid or \c connections is smaller than 1
+         * - MegaError::API_ETOOMANY if \c connections is greater than 100
+         * - MegaError::API_EWRITE if the live value was updated but the new
+         *   persisted value could not be stored
+         *
+         * The value is persisted per SDK base path and restored on subsequent
+         * SDK instances.
          *
          * @param direction Direction of transfers
          * Valid values for this parameter are:
          * - MegaTransfer::TYPE_DOWNLOAD = 0
          * - MegaTransfer::TYPE_UPLOAD = 1
-         * @param connections Maximum number of connection (it should between 1 and 100)
+         * @param connections Maximum number of connections (it should be between 1 and 100)
          */
         void setMaxConnections(int direction, int connections, MegaRequestListener* listener = NULL);
 
@@ -17652,9 +17661,18 @@ class MegaApi
          *
          * The associated request type with this request is MegaRequest::TYPE_SET_MAX_CONNECTIONS
          * Valid data in the MegaRequest object received on callbacks:
-         * - MegaRequest::getNumber - Returns the number of connections
+         * - MegaRequest::getNumber - Returns the requested number of connections
          *
-         * @param connections Maximum number of connection (it should between 1 and 100)
+         * Possible error codes on request finish are:
+         * - MegaError::API_EARGS if \c connections is smaller than 1
+         * - MegaError::API_ETOOMANY if \c connections is greater than 100
+         * - MegaError::API_EWRITE if the live values were updated but the new
+         *   persisted values could not be stored
+         *
+         * The value is persisted per SDK base path and restored on subsequent
+         * SDK instances.
+         *
+         * @param connections Maximum number of connections (it should be between 1 and 100)
          */
         void setMaxConnections(int connections, MegaRequestListener* listener = NULL);
 

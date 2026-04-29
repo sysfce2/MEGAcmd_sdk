@@ -32,6 +32,7 @@ set(SDKLIB_HEADERS
     include/mega/user.h
     include/mega/db.h
     include/mega/megaclient.h
+    include/mega/megaclientprefs.h
     include/mega/autocomplete.h
     include/mega/serialize64.h
     include/mega/nodemanager.h
@@ -132,6 +133,7 @@ set(SDKLIB_SOURCES
     src/localpath.cpp
     src/mediafileattribute.cpp
     src/megaclient.cpp
+    src/megaclientprefs.cpp
     src/node.cpp
     src/pendingcontactrequest.cpp
     src/textchat.cpp

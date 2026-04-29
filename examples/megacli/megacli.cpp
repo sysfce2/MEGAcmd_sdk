@@ -3688,12 +3688,62 @@ void printAuthringInformation(handle userhandle)
 
 void exec_setmaxconnections(autocomplete::ACState& s)
 {
-    auto direction = s.words[1].s == "put" ? PUT : GET;
-    if (s.words.size() == 3)
+    const bool persist = s.extractflag("-persist") || s.extractflag("--persist");
+
+    size_t argIndex = 1;
+    std::optional<direction_t> direction;
+    if (s.words.size() > argIndex)
     {
-        client->setmaxconnections(direction, atoi(s.words[2].s.c_str()));
+        auto directionArg = s.words[argIndex].s;
+        tolower_string(directionArg);
+        if (directionArg == "put" || directionArg == "get")
+        {
+            direction = directionArg == "put" ? PUT : GET;
+            ++argIndex;
+        }
     }
-    cout << "connections: " << (int)client->connections[direction] << endl;
+
+    if (s.words.size() > argIndex)
+    {
+        const int requestedConnections = atoi(s.words[argIndex].s.c_str());
+
+        if (requestedConnections <= 0)
+        {
+            cout << "setmaxconnections failed: " << errorstring(API_EARGS) << endl;
+        }
+        else if (persist)
+        {
+            const auto connections = static_cast<uint8_t>(
+                std::min(requestedConnections,
+                         static_cast<int>(std::numeric_limits<uint8_t>::max())));
+            const auto e = direction ?
+                               client->setmaxconnectionsandpersist(*direction, connections) :
+                               client->setmaxconnectionsandpersist(connections);
+            if (e != API_OK)
+            {
+                cout << "setmaxconnections failed: " << errorstring(e) << endl;
+            }
+        }
+        else if (direction)
+        {
+            client->setmaxconnections(*direction, requestedConnections);
+        }
+        else
+        {
+            client->setmaxconnections(GET, requestedConnections);
+            client->setmaxconnections(PUT, requestedConnections);
+        }
+    }
+
+    if (direction)
+    {
+        cout << "connections: " << (int)client->connections[*direction] << endl;
+    }
+    else
+    {
+        cout << "connections: put=" << (int)client->connections[PUT]
+             << ", get=" << (int)client->connections[GET] << endl;
+    }
 }
 
 
@@ -5527,7 +5577,11 @@ autocomplete::ACN autocompleteSyntax()
 
     p->Add(exec_showattributes, sequence(text("showattributes"), remoteFSPath(client, &cwd)));
 
-    p->Add(exec_setmaxconnections, sequence(text("setmaxconnections"), either(text("put"), text("get")), opt(wholenumber(4))));
+    p->Add(exec_setmaxconnections,
+           sequence(text("setmaxconnections"),
+                    opt(either(text("put"), text("get"), text("PUT"), text("GET"))),
+                    opt(wholenumber(4)),
+                    opt(either(flag("-persist"), flag("--persist")))));
     p->Add(exec_metamac, sequence(text("metamac"), localFSPath(), remoteFSPath(client, &cwd)));
     p->Add(exec_compare_file_and_node,
            sequence(text("compfilewithnode"), localFSPath(), remoteFSPath(client, &cwd)));
