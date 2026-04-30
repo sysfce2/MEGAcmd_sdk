@@ -8529,10 +8529,27 @@ TEST_F(SyncTest, DetectsAndReportsNameClashes)
     ASSERT_EQ(conflicts.size(), 0u);
 
     // Create a remote name clash.
+    // Suspend the sync engine across the two uploads (SDK-5408): otherwise sync may
+    // observe the cloud transition "0 h -> 1 h" between the two putnodes, schedule a
+    // download of /s/d/h, and complete it before the second putnodes' AP arrives.
+    // That leaves a real local h at conflict-detect time, and the SDK correctly
+    // (but undesirably for this assertion) reports it in clashingLocalNames.
+    ASSERT_TRUE(client->disableSync(backupId1,
+                                    NO_SYNC_ERROR,
+                                    /*newEnabledFlag=*/false,
+                                    /*keepSyncDB=*/true));
+
     auto node = client->drillchildnodebyname(client->gettestbasenode(), "x/d");
     ASSERT_TRUE(!!node);
     ASSERT_TRUE(client->uploadFile(root / "d" / "f0", "h", node.get()));
     ASSERT_TRUE(client->uploadFile(root / "d" / "f0", "h", node.get()));
+
+    // Make sure both putnodes APs are landed in the cloud node tree before sync wakes.
+    ASSERT_TRUE(CatchupClients(client));
+
+    // Re-enable sync; the first recursiveSync iteration sees cloudClashingNames = {h, h}
+    // and never visits the "single h" state that would trigger a download.
+    ASSERT_TRUE(client->enableSyncByBackupId(backupId1, "sync1 "));
 
     // Let the client attempt to synchronize.
     waitonsyncs(TIMEOUT, client);
