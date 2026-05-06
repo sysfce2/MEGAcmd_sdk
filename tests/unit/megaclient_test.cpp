@@ -1,5 +1,6 @@
 #include "mega/megaapp.h"
 #include "mega/megaclient.h"
+#include "mega/testhooks.h"
 #include "sdk_test_utils.h"
 #include "utils.h"
 
@@ -30,6 +31,24 @@ protected:
     std::shared_ptr<MegaApp> app;
     std::shared_ptr<MegaClient> client;
     handle testHandle = 0x1234;
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+    HttpReq* setPendingScResponse(const std::string& payload)
+    {
+        HttpReq* req = new HttpReq;
+        req->in = payload;
+        req->contentlength = (m_off_t)payload.size();
+
+        globalMegaTestHooks.interceptSCRequest = [payload, req](std::unique_ptr<HttpReq>& pendingsc)
+        {
+            pendingsc.reset(req);
+
+            globalMegaTestHooks.interceptSCRequest = nullptr;
+        };
+
+        return req;
+    }
+#endif
 };
 
 TEST_F(MegaClientTest, isValidLocalSyncRoot_OK)
@@ -73,5 +92,68 @@ TEST_F(MegaClientTest, isValidLocalSyncRoot_NotAFolder)
     EXPECT_EQ(sErr, INVALID_LOCAL_TYPE);
     EXPECT_EQ(sWarn, NO_SYNC_WARNING);
 }
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+TEST_F(MegaClientTest, chooseScParsingMode_EnableAndDisableStreaming)
+{
+    // Default: disabled
+    ASSERT_FALSE(client->isStreamingEnabled());
+
+    // Enable streaming
+    HttpReq* pendingScHolder = setPendingScResponse(R"({"apm":0,"a":[{}]})");
+    client->chooseScParsingMode();
+
+    EXPECT_TRUE(client->isStreamingEnabled());
+    EXPECT_TRUE(pendingScHolder->mChunked);
+
+    // Disable streaming
+    pendingScHolder = setPendingScResponse(R"({"apm":1,"a":[{}]})");
+    client->chooseScParsingMode();
+
+    EXPECT_FALSE(client->isStreamingEnabled());
+    EXPECT_FALSE(pendingScHolder->mChunked);
+}
+
+TEST_F(MegaClientTest, chooseScParsingMode_EnableStreamingWhenNoApm)
+{
+    // Default: disabled
+    ASSERT_FALSE(client->isStreamingEnabled());
+
+    // Enable streaming
+    HttpReq* pendingScHolder = setPendingScResponse(R"({"a":[{}]})");
+    client->chooseScParsingMode();
+
+    EXPECT_TRUE(client->isStreamingEnabled());
+    EXPECT_TRUE(pendingScHolder->mChunked);
+}
+
+TEST_F(MegaClientTest, chooseScParsingMode_DoesNothingForNonStartPayload)
+{
+    // Default: disabled
+    ASSERT_FALSE(client->isStreamingEnabled());
+
+    // Enable streaming
+    HttpReq* pendingScHolder = setPendingScResponse(R"(["a":[{}]])");
+    client->chooseScParsingMode();
+
+    // No change
+    EXPECT_FALSE(client->isStreamingEnabled());
+    EXPECT_FALSE(pendingScHolder->mChunked);
+}
+
+TEST_F(MegaClientTest, chooseScParsingMode_DoesNothingForShortPayload)
+{
+    // Default: disabled
+    ASSERT_FALSE(client->isStreamingEnabled());
+
+    // Enable streaming
+    HttpReq* pendingScHolder = setPendingScResponse(R"({"apm":)");
+    client->chooseScParsingMode();
+
+    // No change
+    EXPECT_FALSE(client->isStreamingEnabled());
+    EXPECT_FALSE(pendingScHolder->mChunked);
+}
+#endif
 
 } // namespace

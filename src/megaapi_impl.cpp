@@ -4032,10 +4032,22 @@ void MegaTransferPrivate::setLocalPath(const LocalPath& newPath)
     updateLocalPathInternal(newPath);
     LocalPath name = mLocalPath.leafName();
     setFileName(name.toPath(false).c_str());
-    LocalPath parent = mLocalPath.parentPath();
-    if (!parent.empty())
+
+    bool parentPathAvailable = true;
+#ifdef __ANDROID__
+    // On Android, parentPath() is invalid for a URI base path with no appended leaves
+    if (mLocalPath.isURI() && mLocalPath.isRootPath())
     {
-        setParentPath(parent.toPath(false).c_str());
+        parentPathAvailable = false;
+    }
+#endif
+    if (parentPathAvailable)
+    {
+        LocalPath parent = mLocalPath.parentPath();
+        if (!parent.empty())
+        {
+            setParentPath(parent.toPath(false).c_str());
+        }
     }
 }
 
@@ -10197,7 +10209,7 @@ void MegaApiImpl::abortCurrentScheduledCopy(int tag, MegaRequestListener *listen
 }
 
 MegaTransferPrivate* MegaApiImpl::createUploadTransfer(const LocalPath& localPath,
-                                                       MegaNode* parent,
+                                                       MegaHandle parentHandle,
                                                        const MegaUploadOptionsPrivate& options,
                                                        CancelToken cancelToken,
                                                        MegaTransferListener* listener,
@@ -10220,9 +10232,9 @@ MegaTransferPrivate* MegaApiImpl::createUploadTransfer(const LocalPath& localPat
         transfer->setLocalPath(localPath);
     }
 
-    if (parent)
+    if (parentHandle != INVALID_HANDLE)
     {
-        transfer->setParentHandle(parent->getHandle());
+        transfer->setParentHandle(parentHandle);
     }
 
     if (targetUser)
@@ -10297,7 +10309,7 @@ MegaTransferPrivate* MegaApiImpl::createUploadTransfer(const LocalPath& localPat
 }
 
 void MegaApiImpl::startUpload(const std::string localPath,
-                              MegaNode* parent,
+                              MegaHandle parentHandle,
                               CancelToken cancelToken,
                               const MegaUploadOptionsPrivate& options,
                               MegaTransferListener* listener)
@@ -10311,7 +10323,7 @@ void MegaApiImpl::startUpload(const std::string localPath,
     const PitagTrigger pitagTrigger = pitagTriggerFromChar(options.mPublicOptions.pitagTrigger);
     const PitagTarget pitagTarget = pitagTargetFromChar(options.mPublicOptions.pitagTarget);
     MegaTransferPrivate* transfer =
-        createUploadTransfer(path, parent, options, cancelToken, listener);
+        createUploadTransfer(path, parentHandle, options, cancelToken, listener);
 
     const auto nodeType =
         (transfer->fingerprint_filetype == FILENODE) ? PitagNodeType::File : PitagNodeType::Folder;
@@ -10341,7 +10353,7 @@ void MegaApiImpl::startUploadForSupport(const char* localPath, bool isSourceFile
     options.mTargetUser = MegaClient::SUPPORT_USER_HANDLE;
 
     MegaTransferPrivate* transfer =
-        createUploadTransfer(path, nullptr, options, CancelToken(), listener);
+        createUploadTransfer(path, INVALID_HANDLE, options, CancelToken(), listener);
 
     transferQueue.push(transfer);
     waiter->notify();
@@ -10550,7 +10562,11 @@ void MegaApiImpl::retryTransfer(MegaTransfer *transfer, MegaTransferListener *li
 
         const char* transferPath = t->getPath();
         const std::string normalizedPath = transferPath ? transferPath : "";
-        this->startUpload(normalizedPath, parent, t->accessCancelToken(), options, listener);
+        this->startUpload(normalizedPath,
+                          parent ? parent->getHandle() : INVALID_HANDLE,
+                          t->accessCancelToken(),
+                          options,
+                          listener);
 
         delete parent;
     }
@@ -13298,6 +13314,120 @@ sharedNode_vector MegaApiImpl::searchInNodeManager(const MegaSearchFilter* filte
     const NodeSearchPage& np = searchPage ? NodeSearchPage(searchPage->startingOffset(), searchPage->size()) : NodeSearchPage(0, 0);
     sharedNode_vector results = client->mNodeManager.searchNodes(nf, order, cancelToken, np);
     return results;
+}
+
+MegaNodeList* MegaApiImpl::listAllNodesByPage(int mimeType,
+                                              int order,
+                                              CancelToken cancelToken,
+                                              size_t maxElements,
+                                              const MegaSearchCursorOffset* megaCursor)
+{
+    if (mimeType <= MegaApi::FILE_TYPE_DEFAULT || mimeType > MegaApi::FILE_TYPE_LAST)
+    {
+        LOG_warn << "listAllNodesByPage: invalid mimeType value " << mimeType;
+        return new MegaNodeListPrivate();
+    }
+
+    NodeSearchCursorOffset c;
+    if (megaCursor)
+    {
+        const char* lastName = megaCursor->getLastName();
+        if (!lastName || !*lastName)
+        {
+            LOG_warn << "listAllNodesByPage: cursor has missing or empty last name.";
+            return new MegaNodeListPrivate();
+        }
+        const MegaHandle lastHandle = megaCursor->getLastHandle();
+        if (lastHandle == INVALID_HANDLE)
+        {
+            LOG_warn << "listAllNodesByPage: cursor has invalid last handle.";
+            return new MegaNodeListPrivate();
+        }
+        c.mLastName = lastName;
+        c.mLastHandle = static_cast<handle>(lastHandle);
+    }
+    switch (order)
+    {
+        case MegaApi::ORDER_DEFAULT_ASC:
+        case MegaApi::ORDER_DEFAULT_DESC:
+            break;
+        case MegaApi::ORDER_SIZE_ASC:
+        case MegaApi::ORDER_SIZE_DESC:
+            if (megaCursor)
+            {
+                const int64_t lastSize = megaCursor->getLastSize();
+                if (lastSize < 0)
+                {
+                    LOG_warn << "listAllNodesByPage: cursor has missing or negative last size: "
+                             << lastSize;
+                    return new MegaNodeListPrivate();
+                }
+                c.mLastSize = lastSize;
+            }
+            break;
+        case MegaApi::ORDER_MODIFICATION_ASC:
+        case MegaApi::ORDER_MODIFICATION_DESC:
+            if (megaCursor)
+            {
+                const int64_t lastMtime = megaCursor->getLastMtime();
+                if (lastMtime < 0)
+                {
+                    LOG_warn << "listAllNodesByPage: cursor has missing or invalid last mtime: "
+                             << lastMtime;
+                    return new MegaNodeListPrivate();
+                }
+                c.mLastMtime = lastMtime;
+            }
+            break;
+        case MegaApi::ORDER_LABEL_ASC:
+        case MegaApi::ORDER_LABEL_DESC:
+            if (megaCursor)
+            {
+                const int lastLabel = megaCursor->getLastLabel();
+                if (lastLabel < MegaNode::NODE_LBL_UNKNOWN || lastLabel > MegaNode::NODE_LBL_GREY)
+                {
+                    LOG_warn
+                        << "listAllNodesByPage: cursor has missing or out-of-range last label: "
+                        << lastLabel;
+                    return new MegaNodeListPrivate();
+                }
+                c.mLastLabel = lastLabel;
+            }
+            break;
+        case MegaApi::ORDER_FAV_ASC:
+        case MegaApi::ORDER_FAV_DESC:
+            if (megaCursor)
+            {
+                const int lastFav = megaCursor->getLastFav();
+                if (lastFav != 0 && lastFav != 1)
+                {
+                    LOG_warn << "listAllNodesByPage: cursor has missing or invalid last fav value: "
+                             << lastFav;
+                    return new MegaNodeListPrivate();
+                }
+                c.mLastFav = lastFav;
+            }
+            break;
+        default:
+            LOG_warn << "listAllNodesByPage: unsupported order value: " << order;
+            return new MegaNodeListPrivate();
+    }
+
+    std::optional<NodeSearchCursorOffset> cursor;
+    if (megaCursor)
+    {
+        cursor = std::move(c);
+    }
+
+    const auto internalMimeType = static_cast<MimeType_t>(mimeType);
+
+    SdkMutexGuard g(sdkMutex);
+    sharedNode_vector results = client->mNodeManager.listAllNodesByPage(internalMimeType,
+                                                                        order,
+                                                                        cancelToken,
+                                                                        maxElements,
+                                                                        cursor);
+    return new MegaNodeListPrivate(results);
 }
 
 long long MegaApiImpl::getSize(MegaNode *n)
@@ -18800,7 +18930,7 @@ MegaNodeList *MegaApiImpl::getVersions(MegaNode *node)
     bool lookingFor = true;
     while (lookingFor)
     {
-        sharedNode_list nodeList = client->getChildren(current.get(), mega::CancelToken(), true);
+        sharedNode_list nodeList = client->getChildren(current.get());
         if (nodeList.empty())
         {
             lookingFor = false;
@@ -31557,8 +31687,29 @@ MegaFolderUploadController::batchResult MegaFolderUploadController::createNextFo
         tree.childrenLoaded = true;
     }
 
+    bool hasMissingChildren = false;
+
+    if (isBatchRootLevel)
+    {
+        for (auto& t: tree.subtrees)
+        {
+            if (!t->megaNode && tree.megaNode)
+            {
+                t->megaNode.reset(megaApi->getChildNodeOfType(tree.megaNode.get(),
+                                                              t->folderName.c_str(),
+                                                              MegaNode::TYPE_FOLDER));
+            }
+
+            if (!t->megaNode)
+            {
+                hasMissingChildren = true;
+                break;
+            }
+        }
+    }
+
     // recurse until we find nodes not yet created
-    for (auto& t : tree.subtrees)
+    for (auto& t: tree.subtrees)
     {
         assert(newnodes.size() <= MAXNODESUPLOAD);
         if (newnodes.size() >= MAXNODESUPLOAD)
@@ -31569,7 +31720,9 @@ MegaFolderUploadController::batchResult MegaFolderUploadController::createNextFo
 
         if (!t->megaNode && tree.megaNode) // check if our last call created it (or it always existed)
         {
-            t->megaNode.reset(megaApi->getChildNodeOfType(tree.megaNode.get(), t->folderName.c_str(), MegaNode::TYPE_FOLDER));
+            t->megaNode.reset(megaApi->getChildNodeOfType(tree.megaNode.get(),
+                                                          t->folderName.c_str(),
+                                                          MegaNode::TYPE_FOLDER));
         }
 
         // if node doesn't exist yet and we haven't exceeded the limit per batch
@@ -31583,6 +31736,12 @@ MegaFolderUploadController::batchResult MegaFolderUploadController::createNextFo
                 t->newnode.parenthandle = UNDEF;
             }
             newnodes.push_back(std::move(t->newnode));
+        }
+
+        if (isBatchRootLevel && hasMissingChildren && t->megaNode)
+        {
+            // If this level has missing children, only recurse into those branches.
+            continue;
         }
 
         // if newnodes contains at least one newNode, isBatchRootLevel will be false
@@ -31706,13 +31865,14 @@ bool MegaFolderUploadController::genUploadTransfersForFiles(Tree& tree, Transfer
         subOptions.mPublicOptions.appData = transfer->getAppData();
         subOptions.mFsType = tree.fsType;
 
-        MegaTransferPrivate* subTransfer =
-            megaApi->createUploadTransfer(localpath.lp,
-                                          tree.megaNode.get(),
-                                          subOptions,
-                                          transfer->accessCancelToken(),
-                                          this,
-                                          &localpath.fp);
+        MegaTransferPrivate* subTransfer = megaApi->createUploadTransfer(
+            localpath.lp,
+            tree.megaNode ? tree.megaNode->getHandle() : INVALID_HANDLE,
+            subOptions,
+            transfer->accessCancelToken(),
+            this,
+            &localpath.fp);
+
         Pitag pitag{PitagPurpose::Upload,
                     transfer->getPitag().trigger,
                     PitagNodeType::Folder,
@@ -32451,7 +32611,7 @@ void MegaScheduledCopyController::onFolderAvailable(MegaHandle handle)
 
                         const std::string childPathStr = childPath.toPath(false);
                         megaApi->startUpload(childPathStr,
-                                             parent,
+                                             parent ? parent->getHandle() : INVALID_HANDLE,
                                              CancelToken(),
                                              uploadOptions,
                                              this);
@@ -36030,7 +36190,7 @@ int MegaHTTPServer::onMessageComplete(http_parser *parser)
             uploadOptions.mFsType = fsType;
 
             httpctx->megaApi->startUpload(httpctx->tmpFileName,
-                                          newParentNode,
+                                          newParentNode->getHandle(),
                                           CancelToken(),
                                           uploadOptions,
                                           httpctx);
@@ -38798,7 +38958,7 @@ void MegaFTPDataServer::processReceivedData(MegaTCPContext *tcpctx, ssize_t nrea
                 uploadOptions.mFsType = fsType;
 
                 ftpdatactx->megaApi->startUpload(ftpdatactx->tmpFileName,
-                                                 newParentNode.get(),
+                                                 newParentNode->getHandle(),
                                                  CancelToken(),
                                                  uploadOptions,
                                                  fds->controlftpctx);

@@ -45,14 +45,19 @@ target_sources(test_integration
     SdkTestDeviceCenter_test.cpp
     SdkTestSyncLocalOperations_test.cpp
     SdkTestSyncNodeAttribute_test.cpp
+    SdkTestSyncVersionedNodeDeletion_test.cpp
     SdkTestCaseInsensitiveCollision_test.cpp
     backup_sync_operations_test.cpp
     sdk_test_lockless_cs_channel.cpp
     sdk_test_pitag.cpp
     SdkTestFolderController_test.cpp
     SdkTestGetChildrenLexicographic_test.cpp
+    SdkTestListAllNodesByPage_test.cpp
+    SdkTestTransferPriorityRestore_test.cpp
     sdk_test_share.cpp
     sdk_test_share_nested.cpp
+    SdkTestMassiveActionPackets_test.cpp
+    sdk_test_shares.cpp
 
     passwordManager/SdkTestPasswordManager.cpp
     passwordManager/SdkTestPasswordManager.h

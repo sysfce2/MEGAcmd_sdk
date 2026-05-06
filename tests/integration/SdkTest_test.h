@@ -33,6 +33,7 @@
 
 #include <atomic>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iostream>
 #include <memory>
@@ -900,6 +901,15 @@ public:
     void locallogout(unsigned apiIndex = 0);
     void resumeSession(const char *session, unsigned apiIndex = 0);
 
+    /**
+     * @brief Runs the SdkVersionManagement test sequence (create versions, move, remove
+     * versions/nodes, version limit).
+     * @param preDeleteInjection Optional callback invoked after version/move setup but before
+     * deletion operations. Used to inject locallogout+resumeSession+fetchnodes to force the
+     * getChildren_internal() slow path.
+     */
+    void runVersionManagementSequence(std::function<void()> preDeleteInjection = nullptr);
+
     void purgeTree(unsigned int apiIndex, MegaNode *p, bool depthfirst = true);
     void cleanupContacts(const unsigned int nApi);
     void cleanupShares(const unsigned int nApi);
@@ -1522,9 +1532,9 @@ public:
 
     MegaHandle getCommander();
 
-    void testChat(bool isPublicChat);
+    void testChat(bool isPublicChat, bool useStreamingMode);
 
-    void testGiveRemoveChatAccess(bool isPublicChat);
+    void testGiveRemoveChatAccess(bool isPublicChat, bool useStreamingMode);
 #endif
 
     template<typename... requestArgs>

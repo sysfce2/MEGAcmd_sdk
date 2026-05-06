@@ -282,6 +282,13 @@ std::unique_ptr<::mega::MegaNode> uploadFile(::mega::MegaApi* megaApi,
                                     const std::string& name,
                                     const ::mega::MegaNode::CreditCardNodeData* data,
                                     const ::mega::handle parentNodeHandle);
+
+/**
+ * @brief Set SC parser mode by installing an SC interception hook that injects `"apm":1/0` into the
+ * SC payload.
+ */
+void setScParserMode(bool isStreamingMode);
+void resetScParserMode();
 }
 
 #endif // INCLUDE_INTEGRATION_INTEGRATION_TEST_UTILS_H_

@@ -38,9 +38,11 @@
 #include "pubkeyaction.h"
 #include "pwm_file_parser.h"
 #include "request.h"
+#include "sc_streaming_parser.h"
 #include "setandelement.h"
 #include "sharenodekeys.h"
 #include "sync.h"
+#include "testhooks.h"
 #include "transfer.h"
 #include "transferstats.h"
 #include "treeproc.h"
@@ -491,6 +493,13 @@ private:
 
     // true if the credentials of this user require verification
     bool verificationRequired(handle userHandle);
+
+    // Helper to send Pending Keys to the sharees
+    bool sendPendingKey(const handle nodehandle, User* u);
+
+    // Helper to send Pending Keys to the contacts involved in a nested share.
+    void propagateKeysForNestedShares(handle promotedNodeHandle,
+                                      const std::vector<std::string>& newShareeUids);
 };
 
 struct DynamicMessageNotification
@@ -1602,9 +1611,7 @@ public:
     std::shared_ptr<Node> getovnode(Node *parent, string *name);
 
     // Load from db node children at first level
-    sharedNode_list getChildren(const Node* parent,
-                                CancelToken cancelToken = CancelToken(),
-                                bool includeVersions = false);
+    sharedNode_list getChildren(const Node* parent, CancelToken cancelToken = CancelToken());
 
     // Get number of children from a node
     size_t getNumberOfChildren(NodeHandle parentHandle);
@@ -1775,6 +1782,18 @@ private:
     std::unique_ptr<HttpReq> pendingsc;
     std::unique_ptr<HttpReq> pendingscUserAlerts;
     BackoffTimer btsc;
+    ScStreamingParser scStreamingParser;
+
+    /*
+     * This is a switch for parsing action aackets from SC channel
+     * if true, use the ScStreamingParser to handle action packets
+     * if false, use original mode, which will call procsc()
+     */
+    bool mStreamingEnabled = false;
+
+    // Every time received data from sc channel, set this to true
+    // If some error occurred, set this to false, it will stop current parsing process
+    bool mStreamingContinue = false;
 
     int mPendingCatchUps = 0;
     bool mReceivingCatchUp = false;
@@ -1880,14 +1899,15 @@ public:
 
     // server-client command processing
     void sc_storeSn(JSON& json);
+    void sc_purgeAndCommit();
     void sc_procEoo(std::unique_lock<recursive_mutex>& nodeTreeIsChanging, bool originalAC);
     // process an action packet
     bool sc_procActionPacket(JSON& json, std::shared_ptr<Node>& lastAPDeletedNode);
+    void sc_updateStats();
     // process an action packet excluding a, i and st tags
-    void sc_procActionPacketWithoutCommonTags(JSON& json,
-                                              nameid name,
-                                              bool isSelfOriginating,
-                                              std::shared_ptr<Node>& lastAPDeletedNode);
+    std::shared_ptr<Node> sc_procActionPacketWithoutCommonTags(JSON& json,
+                                                               nameid name,
+                                                               bool isSelfOriginating);
     // evaluates if the sequence tag matches
     bool sc_checkSequenceTag(const string& tag);
     // check if it is ok to process the current action packet
@@ -2545,6 +2565,14 @@ public:
                  handle& previousHandleForAlert,
                  set<NodeHandle>* allParents);
 
+#ifdef ENABLE_SYNC
+    void postReadNodes(bool notify,
+                       NodeManager::MissingParentNodes& missingParentNodes,
+                       set<NodeHandle>* allParents);
+#else
+    void postReadNodes(bool notify, NodeManager::MissingParentNodes& missingParentNodes);
+#endif
+
     void readok(JSON*);
     void readokelement(JSON*);
     void readoutshares(JSON*);
@@ -2577,13 +2605,77 @@ public:
 
     // Process states and prepare data
     void handleScNonStreaming();
+    void handleScInStreaming();
 
+    bool handleScKeepAliveInSuccessState();
     void handleScErrorInSuccessState();
     void handleScInFailureState();
+    bool handleScTimeoutInFlightState();
 
     // Process actual data from the server-client channel
     void processScMessageNonStreaming();
     bool procsc(JSON& json);
+    void processScMessageInStreaming();
+
+    // Check if streaming parsing action packets is enabled
+    inline bool isStreamingEnabled() const
+    {
+        return mStreamingEnabled;
+    }
+
+    // Enable streaming parsing action packets
+    inline void enableStreaming()
+    {
+        assert(!jsonsc.pos);
+        mStreamingEnabled = true;
+        if (pendingsc)
+        {
+            pendingsc->mChunked = true;
+        }
+    }
+
+    // Disable streaming parsing action packets
+    inline void disableStreaming()
+    {
+        assert(!scStreamingParser.hasStarted());
+        mStreamingEnabled = false;
+        if (pendingsc)
+        {
+            pendingsc->mChunked = false;
+        }
+    }
+
+    inline void clearStreamingParser()
+    {
+        scStreamingParser.clear();
+        mStreamingContinue = false;
+    }
+
+    inline void resetScRequest()
+    {
+        pendingsc.reset();
+        btsc.reset();
+    }
+
+    // Abort backoff timer for cs request
+    inline void abortBackoffTimerForCsRequest()
+    {
+        if (reqs.retryReasonIsApi())
+        {
+            btcs.reset();
+        }
+    }
+
+    // Check if sc parsing is in progress
+    inline bool isParsingSc()
+    {
+        return (isStreamingEnabled() && scStreamingParser.hasStarted()) ||
+               (!isStreamingEnabled() && jsonsc.pos);
+    }
+
+    void setStreamingContinue();
+
+    void chooseScParsingMode();
 
     size_t procreqstat();
 
@@ -2707,7 +2799,7 @@ public:
     // Enable create DB indexes for queries used in search functionality
     // By default is true (reset to default value at locallogout)
     void enableSearchDBIndexes(bool enable);
-    // Enable create DB indexes for queries listing nodes using lexicographical oreder
+    // Enable create DB indexes for queries listing nodes using lexicographical order
     // By default is false (reset to default value at locallogout)
     void enableLexicographicDBIndexes(bool enable);
     // Drop DB indexes for queries used in search functionality
@@ -3522,6 +3614,10 @@ public:
 
     // FUSE service.
     fuse::Service mFuseService;
+
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+    MegaTestHooks megaTestHooks;
+#endif
 
 private:
 #ifdef ENABLE_SYNC

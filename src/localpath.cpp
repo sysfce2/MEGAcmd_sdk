@@ -44,16 +44,6 @@ std::optional<string_type> URIHandler::getName(const string_type& uri)
     return std::nullopt;
 }
 
-std::optional<string_type> URIHandler::getParentURI(const string_type& uri)
-{
-    if (mPlatformHelper)
-    {
-        return mPlatformHelper->getParentURI(uri);
-    }
-
-    return std::nullopt;
-}
-
 std::optional<string_type> URIHandler::getPath(const string_type& uri)
 {
     if (mPlatformHelper)
@@ -1854,10 +1844,6 @@ void PathURI::changeLeaf(const LocalPath& newLeaf)
     {
         mAuxPath.pop_back();
     }
-    else if (const auto uri = URIHandler::getParentURI(mUri); uri.has_value())
-    {
-        mUri = uri.value();
-    }
     else
     {
         LOG_err << "Error change leaf with uri";
@@ -1929,10 +1915,10 @@ void PathURI::removeLastElement()
     {
         mAuxPath.pop_back();
     }
-    else if (std::optional<string_type> parentPath = URIHandler::getParentURI(mUri);
-             parentPath.has_value())
+    else
     {
-        mUri = parentPath.value();
+        LOG_err << "Error remove last element with uri";
+        assert(false && "Error remove last element with uri");
     }
 }
 

@@ -3653,6 +3653,82 @@ private:
     size_t mSize;
 };
 
+class MegaSearchCursorOffsetPrivate: public MegaSearchCursorOffset
+{
+public:
+    MegaSearchCursorOffsetPrivate* copy() const override
+    {
+        return new MegaSearchCursorOffsetPrivate(*this);
+    }
+
+    void setLastName(const char* lastName) override
+    {
+        mLastName = lastName ? lastName : "";
+    }
+
+    void setLastHandle(MegaHandle lastHandle) override
+    {
+        mLastHandle = lastHandle;
+    }
+
+    void setLastSize(int64_t lastSize) override
+    {
+        mLastSize = lastSize;
+    }
+
+    void setLastMtime(int64_t lastMtime) override
+    {
+        mLastMtime = lastMtime;
+    }
+
+    void setLastLabel(int lastLabel) override
+    {
+        mLastLabel = lastLabel;
+    }
+
+    void setLastFav(int lastFav) override
+    {
+        mLastFav = lastFav;
+    }
+
+    const char* getLastName() const override
+    {
+        return mLastName.c_str();
+    }
+
+    MegaHandle getLastHandle() const override
+    {
+        return mLastHandle;
+    }
+
+    int64_t getLastSize() const override
+    {
+        return mLastSize;
+    }
+
+    int64_t getLastMtime() const override
+    {
+        return mLastMtime;
+    }
+
+    int getLastLabel() const override
+    {
+        return mLastLabel;
+    }
+
+    int getLastFav() const override
+    {
+        return mLastFav;
+    }
+
+private:
+    std::string mLastName;
+    MegaHandle mLastHandle = INVALID_HANDLE;
+    int64_t mLastSize = -1;
+    int64_t mLastMtime = -1;
+    int mLastLabel = -1;
+    int mLastFav = -1;
+};
 
 class MegaGfxProviderPrivate : public MegaGfxProvider
 {
@@ -4033,14 +4109,14 @@ class MegaApiImpl : public MegaApp
         };
 
         void startUpload(const std::string localPath,
-                         MegaNode* parent,
+                         MegaHandle parentHandle,
                          CancelToken cancelToken,
                          const MegaUploadOptionsPrivate& options,
                          MegaTransferListener* listener);
 
         MegaTransferPrivate*
             createUploadTransfer(const LocalPath& localPath,
-                                 MegaNode* parent,
+                                 MegaHandle parentHandle,
                                  const MegaUploadOptionsPrivate& options,
                                  CancelToken cancelToken,
                                  MegaTransferListener* listener,
@@ -4424,8 +4500,17 @@ public:
 
         MegaNodeList* search(const MegaSearchFilter* filter, int order, CancelToken cancelToken, const MegaSearchPage* searchPage);
 
+        MegaNodeList* listAllNodesByPage(int mimeType,
+                                         int order,
+                                         CancelToken cancelToken,
+                                         size_t maxElements,
+                                         const MegaSearchCursorOffset* cursor);
+
     private:
-        sharedNode_vector searchInNodeManager(const MegaSearchFilter* filter, int order, CancelToken cancelToken, const MegaSearchPage* searchPage);
+        sharedNode_vector searchInNodeManager(const MegaSearchFilter* filter,
+                                              int order,
+                                              CancelToken cancelToken,
+                                              const MegaSearchPage* searchPage);
 
     public:
         bool processMegaTree(MegaNode* node, MegaTreeProcessor* processor, bool recursive = 1);

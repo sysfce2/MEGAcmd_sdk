@@ -1981,6 +1981,7 @@ MegaClient::MegaClient(MegaApp* a,
     btworkinglock(rng),
     btreqstat(rng),
     btsc(rng),
+    scStreamingParser(*this, rng),
     btpfa(rng),
     fsaccess(new FSACCESS_CLASS()),
     dbaccess(d),
@@ -2125,6 +2126,9 @@ MegaClient::MegaClient(MegaApp* a,
     h->setuseragent(&useragent);
     h->setmaxdownloadspeed(0);
     h->setmaxuploadspeed(0);
+
+    // Initialize filters in the streaming parser for action packets
+    scStreamingParser.init();
 }
 
 MegaClient::~MegaClient()
@@ -2132,6 +2136,8 @@ MegaClient::~MegaClient()
     LOG_debug << clientname << "~MegaClient running";
     destructorRunning = true;
     locallogout(false, true);
+
+    clearStreamingParser();
 
     delete pendingcs;
     delete badhostcs;
@@ -3280,6 +3286,7 @@ void MegaClient::exec()
                 pendingsc->protect = true;
                 pendingsc->posturl.append("?sn=");
                 pendingsc->posturl.append(scsn.text());
+                pendingsc->posturl.append("&isn=1");
                 // folder links should not send "sid" to avoid receiving packets unrelated to the folder link
                 bool suppressSID = loggedIntoFolder() ? true : false;
                 pendingsc->posturl.append(getAuthURI(suppressSID, true));
@@ -3290,6 +3297,10 @@ void MegaClient::exec()
                 }
 
                 pendingsc->type = REQ_JSON;
+                if (isStreamingEnabled())
+                {
+                    pendingsc->mChunked = true;
+                }
                 pendingsc->post(this);
                 app->notify_network_activity(NetworkActivityChannel::SC,
                                              NetworkActivityType::REQUEST_SENT,
@@ -3836,7 +3847,8 @@ int MegaClient::preparewait()
             }
         }
 
-        if (!pendingscTimedOut && !jsonsc.pos && pendingsc && pendingsc->status == REQ_INFLIGHT)
+        if (!pendingscTimedOut && (isStreamingEnabled() || !jsonsc.pos) && pendingsc &&
+            pendingsc->status == REQ_INFLIGHT)
         {
             dstime timeout = pendingsc->lastdata + HttpIO::SCREQUESTTIMEOUT;
             if (timeout > Waiter::ds && timeout < nds)
@@ -4838,11 +4850,12 @@ void MegaClient::disconnect()
 void MegaClient::catchup()
 {
     mPendingCatchUps++;
-    if (pendingsc && !jsonsc.pos)
+    if (pendingsc && !isParsingSc())
     {
         LOG_debug << "Terminating pendingsc connection for catchup.   Pending: " << mPendingCatchUps;
         pendingsc->disconnect();
         pendingsc.reset();
+        clearStreamingParser();
     }
     btsc.reset();
 }
@@ -5343,6 +5356,11 @@ void MegaClient::sc_storeSn(JSON& json)
     // At this point no CurrentSeqtag should be seen. mCurrentSeqtagSeen is set true
     // when action package is processed and the seq tag matches with mCurrentSeqtag
     assert(!mCurrentSeqtagSeen);
+    sc_purgeAndCommit();
+}
+
+void MegaClient::sc_purgeAndCommit()
+{
     notifypurge();
     if (sctable)
     {
@@ -5526,13 +5544,15 @@ bool MegaClient::sc_procActionPacket(JSON& json, std::shared_ptr<Node>& lastAPDe
         // the "a" attribute is guaranteed to be the first in the object
         if (json.getnameid() == makeNameid("a"))
         {
+            sc_updateStats();
+
             nameid name = json.getnameidvalue();
 
             bool isSelfOriginating = Utils::startswith(json.pos, "\"i\":\"") &&
                                      !memcmp(json.pos + 5, sessionid, sizeof sessionid) &&
                                      json.pos[5 + sizeof sessionid] == '"';
 
-            sc_procActionPacketWithoutCommonTags(json, name, isSelfOriginating, lastAPDeletedNode);
+            lastAPDeletedNode = sc_procActionPacketWithoutCommonTags(json, name, isSelfOriginating);
         }
         else
         {
@@ -5545,24 +5565,27 @@ bool MegaClient::sc_procActionPacket(JSON& json, std::shared_ptr<Node>& lastAPDe
     return false;
 }
 
-void MegaClient::sc_procActionPacketWithoutCommonTags(JSON& json,
-                                                      nameid name,
-                                                      bool isSelfOriginating,
-                                                      std::shared_ptr<Node>& lastAPDeletedNode)
+void MegaClient::sc_updateStats()
 {
-    bool moveOperation = false; // true if "d" packet has "m":1
-
     if (!statecurrent)
     {
         fnstats.actionPackets++;
     }
+}
+
+std::shared_ptr<Node> MegaClient::sc_procActionPacketWithoutCommonTags(JSON& json,
+                                                                       nameid name,
+                                                                       bool isSelfOriginating)
+{
+    bool moveOperation = false; // true if "d" packet has "m":1
+    std::shared_ptr<Node> lastAPDeletedNode;
 
     // only process server-client request if not marked as
     // self-originating ("i" marker element guaranteed to be following
     // "a" element if present)
     if (fetchingnodes || !isSelfOriginating || name == name_id::d ||
-        name == 't') // we still set 'i' on move commands to produce backward
-                     // compatible actionpackets, so don't skip those here
+        name == makeNameid("t")) // we still set 'i' on move commands to produce backward
+                                 // compatible actionpackets, so don't skip those here
     {
 #ifdef ENABLE_CHAT
         bool readingPublicChat = false;
@@ -5731,6 +5754,8 @@ void MegaClient::sc_procActionPacketWithoutCommonTags(JSON& json,
     {
         lastAPDeletedNode.reset();
     }
+
+    return lastAPDeletedNode;
 }
 
 size_t MegaClient::procreqstat()
@@ -6530,6 +6555,10 @@ bool MegaClient::sc_checkActionPacket(JSON& json, const Node* lastAPDeletedNode)
         {
         case makeNameid("a"): // action referred by the packet
             cmd = json.getnameid();
+            break;
+
+        case makeNameid("isn"): // interism sn
+            json.storeobject();
             break;
 
         case makeNameid("i"): // id of the client who made the action triggering this packet
@@ -10512,14 +10541,10 @@ int MegaClient::readnodes(JSON* j,
         }
     }
 
-    mergenewshares(notify != 0);
-    mNodeManager.checkOrphanNodes(missingParentNodes);
-
 #ifdef ENABLE_SYNC
-    for (NodeHandle p : allParents)
-    {
-        syncs.triggerSync(p);
-    }
+    postReadNodes(notify, missingParentNodes, &allParents);
+#else
+    postReadNodes(notify, missingParentNodes);
 #endif
 
     return j->leavearray();
@@ -10797,6 +10822,25 @@ int MegaClient::readnode(JSON* j,
                         mNewKeyRepository[NodeHandle().set6byte(h)] = std::move(buf);
                     }
                 }
+                else if (t == FOLDERNODE && !notify && !loggedIntoFolder() && !ISUNDEF(u) &&
+                         u != me) // 'notify' is false only while processing fetchnodes command.
+                {
+                    // Foreign folder node which is not an inshare. We may still have a sharekey for
+                    // it (nested share). If set, new pushed nodes can take it into acount and
+                    // encrypt the node key for it.
+                    auto shareKey = mKeyManager.getShareKey(h);
+                    if (shareKey.size() && mKeyManager.isShareKeyTrusted(h))
+                    {
+                        // So the node has the sharekey but without being an inshare (no user data)
+                        newshares.push_back(
+                            new NewShare(h,
+                                         0,
+                                         UNDEF,
+                                         ACCESS_UNKNOWN,
+                                         0,
+                                         reinterpret_cast<const byte*>(shareKey.data())));
+                    }
+                }
 
                 if (u != me && !ISUNDEF(u) && !fetchingnodes && !loggedIntoFolder())
                 {
@@ -10858,6 +10902,25 @@ int MegaClient::readnode(JSON* j,
     }
 
     return 0;
+}
+
+#ifdef ENABLE_SYNC
+void MegaClient::postReadNodes(bool notify,
+                               NodeManager::MissingParentNodes& missingParentNodes,
+                               set<NodeHandle>* allParents)
+#else
+void MegaClient::postReadNodes(bool notify, NodeManager::MissingParentNodes& missingParentNodes)
+#endif
+{
+    mergenewshares(notify != 0);
+    mNodeManager.checkOrphanNodes(missingParentNodes);
+
+#ifdef ENABLE_SYNC
+    for (NodeHandle p: *allParents)
+    {
+        syncs.triggerSync(p);
+    }
+#endif
 }
 
 // decrypt and set encrypted sharekey
@@ -12643,7 +12706,7 @@ void MegaClient::proctree(std::shared_ptr<Node> n, TreeProc* tp, bool skipinshar
             it++;
             if (!(skipinshares && node->inshare))
             {
-                proctree(node, tp, skipinshares);
+                proctree(node, tp, skipinshares, skipversions);
             }
         }
     }
@@ -16147,6 +16210,7 @@ void MegaClient::resetScForFetchnodes()
 
     // prevent the processing of previous sc requests
     pendingsc.reset();
+    clearStreamingParser();
 
     if (pendingscUserAlerts)
     {
@@ -18867,13 +18931,15 @@ bool MegaClient::startxfer(direction_t d, File* f, TransferDbCommitter& committe
             // Only the Transfer's own localpath field tells us the path it was uploading
 
             auto rangeCached = multi_cachedtransfers[d].equal_range(f);
-            for (auto& it = rangeCached.first; it != rangeCached.second; ++it)
+            for (auto it = rangeCached.first; it != rangeCached.second; ++it)
             {
                 assert(it->second->files.empty());
-                if (it->second->localfilename.empty()) continue;
 
                 if (d == PUT)
                 {
+                    if (it->second->localfilename.empty())
+                        continue;
+
                     // for uploads, check for the same source file
                     if (it->second->localfilename == f->getLocalname())
                     {
@@ -18904,25 +18970,34 @@ bool MegaClient::startxfer(direction_t d, File* f, TransferDbCommitter& committe
                 // got suspended (eg by app exit), and we are considering the File of one of the others
                 // than the actual file path that was being uploaded.
 
-                for (auto& it = rangeCached.first; it != rangeCached.second; ++it)
+                for (auto it = rangeCached.first; it != rangeCached.second; ++it)
                 {
                     assert(it->second->files.empty());
-                    if (it->second->localfilename.empty()) continue;
 
-                    string ext1, ext2;
-                    if (fsaccess->getextension(f->getLocalname(), ext1) &&
-                        fsaccess->getextension(it->second->localfilename, ext2))
+                    if (!it->second->localfilename.empty())
                     {
-                        if (!ext1.empty() && ext1[0] == '.') ext1.erase(0, 1);
-                        if (!ext2.empty() && ext2[0] == '.') ext2.erase(0, 1);
-
-                        if (treatAsIfFileDataEqual(*f, ext1,
-                                                   *it->first, ext2))
+                        string ext1, ext2;
+                        if (fsaccess->getextension(f->getLocalname(), ext1) &&
+                            fsaccess->getextension(it->second->localfilename, ext2))
                         {
-                            t = it->second;
-                            multi_cachedtransfers[d].erase(it);
-                            break;
+                            if (!ext1.empty() && ext1[0] == '.')
+                                ext1.erase(0, 1);
+                            if (!ext2.empty() && ext2[0] == '.')
+                                ext2.erase(0, 1);
+
+                            if (treatAsIfFileDataEqual(*f, ext1, *it->first, ext2))
+                            {
+                                t = it->second;
+                                multi_cachedtransfers[d].erase(it);
+                                break;
+                            }
                         }
+                    }
+                    else
+                    {
+                        t = it->second;
+                        multi_cachedtransfers[d].erase(it);
+                        break;
                     }
                 }
             }
@@ -18990,6 +19065,10 @@ bool MegaClient::startxfer(direction_t d, File* f, TransferDbCommitter& committe
             {
                 t = new Transfer(this, d);
                 *(FileFingerprint*)t = *(FileFingerprint*)f;
+                if (d == GET)
+                {
+                    t->downloadFileHandle = f->h;
+                }
             }
 
             t->skipserialization = donotpersist;
@@ -19496,11 +19575,9 @@ std::shared_ptr<Node> MegaClient::getovnode(Node *parent, string *name)
     return nullptr;
 }
 
-sharedNode_list MegaClient::getChildren(const Node* parent,
-                                        CancelToken cancelToken,
-                                        bool includeVersions)
+sharedNode_list MegaClient::getChildren(const Node* parent, CancelToken cancelToken)
 {
-    return mNodeManager.getChildren(parent, cancelToken, includeVersions);
+    return mNodeManager.getChildren(parent, cancelToken);
 }
 
 size_t MegaClient::getNumberOfChildren(NodeHandle parentHandle)
@@ -23559,53 +23636,133 @@ string KeyManager::getPrivRSA()
     return mPrivRSA;
 }
 
+bool KeyManager::sendPendingKey(const handle nodehandle, User* u)
+{
+    auto shareit = mShareKeys.find(nodehandle);
+    if (shareit != mShareKeys.end())
+    {
+        std::string encryptedKey = encryptShareKeyTo(u->userhandle, shareit->second.first);
+        if (encryptedKey.size())
+        {
+            mClient.queueCommand(
+                new CommandPendingKeys(&mClient,
+                                       u->userhandle,
+                                       nodehandle,
+                                       (byte*)encryptedKey.data(),
+                                       [](Error err)
+                                       {
+                                           if (err)
+                                           {
+                                               LOG_err << "Error sending share key: " << err;
+                                           }
+                                           else
+                                           {
+                                               LOG_debug << "Share key correctly sent";
+                                           }
+                                       }));
+            return true;
+        }
+        else
+        {
+            LOG_warn << "Unable to encrypt share key of the outshare " << toNodeHandle(nodehandle)
+                     << " to uh: " << toHandle(u->userhandle);
+        }
+    }
+    return false;
+}
+
+void KeyManager::propagateKeysForNestedShares(handle promotedNodeHandle,
+                                              const std::vector<std::string>& newShareeUids)
+{
+    auto promotedOutShareNode = mClient.nodebyhandle(promotedNodeHandle);
+    if (!promotedOutShareNode)
+    {
+        LOG_warn << "Skipping other peers pk upon pending-outshare promotion. Node is missing: "
+                 << toNodeHandle(promotedNodeHandle);
+        return;
+    }
+
+    auto outSharesList = mClient.mNodeManager.getNodesWithOutShares();
+    for (auto& alreadySharedNode: outSharesList)
+    {
+        if (!alreadySharedNode->outshares)
+        {
+            LOG_err << "Already shared node does not have an associated outshare. Handle: "
+                    << toNodeHandle(alreadySharedNode->nodeHandle());
+            continue;
+        }
+
+        // Send the new share key to each higher level sharee
+        // Needed so they can decrypt files from the new sharee in the new low level share
+        if (promotedOutShareNode->isbelow(alreadySharedNode->nodeHandle()))
+        {
+            for (const auto& [_, existingShare]: *alreadySharedNode->outshares)
+            {
+                if (User* existingSharee = existingShare->user;
+                    existingSharee && // Folder links are shared without user.
+                    !verificationRequired(existingSharee->userhandle))
+                {
+                    LOG_debug << "Sending sharekey of outshare "
+                              << toNodeHandle(promotedOutShareNode->nodehandle)
+                              << " to higher level sharee " << existingSharee->uid;
+                    sendPendingKey(promotedOutShareNode->nodehandle, existingSharee);
+                }
+            }
+        }
+
+        // Send the lower level share keys to each new sharee
+        // Needed so they can decrypt new files from the existing sharees in the existing
+        // low level shares
+        if (alreadySharedNode->isbelow(promotedOutShareNode.get()))
+        {
+            // Only for sharees who we've sent the share key
+            for (const auto& newShareeUID: newShareeUids)
+            {
+                if (User* newShareeUser = mClient.finduser(newShareeUID.c_str(), 0);
+                    newShareeUser) // Folder links are shared without user.
+                {
+                    LOG_debug << "Sending sharekey of lower level outshare "
+                              << toNodeHandle(alreadySharedNode->nodehandle) << " to "
+                              << newShareeUID;
+                    sendPendingKey(alreadySharedNode->nodehandle, newShareeUser);
+                }
+            }
+        }
+    }
+}
+
 bool KeyManager::promotePendingShares()
 {
     bool attributeUpdated = false;
     bool newshares = false;
     std::vector<std::string> keysToDelete;
 
-    for (const auto& it : mPendingOutShares)
+    for (const auto& [nodehandle, newShareeUIDList]: mPendingOutShares)
     {
-        handle nodehandle = it.first;
-        for (const auto& uid : it.second)
+        // Send the share key to each sharee
+        for (const auto& uid: newShareeUIDList)
         {
             User *u = mClient.finduser(uid.c_str(), 0);
             if (u && !verificationRequired(u->userhandle))
             {
                 LOG_debug << "Promoting pending outshare of node " << toNodeHandle(nodehandle) << " for " << uid;
-                auto shareit = mShareKeys.find(nodehandle);
-                if (shareit != mShareKeys.end())
+                if (sendPendingKey(nodehandle, u))
                 {
-                    std::string encryptedKey = encryptShareKeyTo(u->userhandle, shareit->second.first);
-                    if (encryptedKey.size())
-                    {
-                        mClient.queueCommand(new CommandPendingKeys(
-                            &mClient,
-                            u->userhandle,
-                            nodehandle,
-                            (byte*)encryptedKey.data(),
-                            [uid](Error err)
-                            {
-                                if (err)
-                                {
-                                    LOG_err << "Error sending share key: " << err;
-                                }
-                                else
-                                {
-                                    LOG_debug << "Share key correctly sent";
-                                }
-                            }));
-
-                        keysToDelete.push_back(uid);
-                        attributeUpdated = true;
-                    }
-                    else
-                    {
-                        LOG_warn << "Unable to encrypt share key to promote pending outshare " << toNodeHandle(nodehandle) << " uh: " << toHandle(u->userhandle);
-                    }
+                    keysToDelete.push_back(uid);
+                    attributeUpdated = true;
+                }
+                else
+                {
+                    LOG_warn << "Unable to promote pending outshare " << toNodeHandle(nodehandle)
+                             << " uh: " << toHandle(u->userhandle);
                 }
             }
+        }
+
+        // If the outshare has been promoted, send keys to other interested peers, if any.
+        if (!keysToDelete.empty())
+        {
+            propagateKeysForNestedShares(nodehandle, keysToDelete);
         }
 
         for (const auto& uid : keysToDelete)
@@ -25026,32 +25183,75 @@ void MegaClient::setMegaURL(const std::string& url)
     MEGAURL = url;
 }
 
+/*
+ * The action packets look like:
+ * {"apm":0,"a": [{}, {}...],...}
+ * 1. apm:1, using legacy mode
+ * 2. apm is absent, or its value is not 1, using streaming mode
+ */
+void MegaClient::chooseScParsingMode()
+{
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+    if (globalMegaTestHooks.interceptSCRequest)
+    {
+        globalMegaTestHooks.interceptSCRequest(pendingsc);
+    }
+#endif
+
+    if (*pendingsc->in.c_str() == '{' && pendingsc->in.size() > 7)
+    {
+        std::string_view str = pendingsc->in;
+        if (str.compare(2, 3, "apm") == 0 && str[7] == '1')
+        {
+            disableStreaming();
+        }
+        else
+        {
+            // If SC parsing streaming mode is changed from false to true, the log of the first
+            // chunk will be missed. Log it here to avoid that. If SC parsing streaming mode is
+            // changed from true to false, the log of the first chunk will be duplicated with the
+            // nonchunk log. But it is acceptable since it is only for debugging. This workaround
+            // will be removed after the SC parsing non-streaming mode is removed.
+            if (!isStreamingEnabled() && pendingsc->status == REQ_INFLIGHT)
+            {
+                JSON_CHUNK_RECEIVED << pendingsc->getLogName() << "Received chunk "
+                                    << pendingsc->size() << ": "
+                                    << MaxDirectMessage(pendingsc->data(),
+                                                        pendingsc->size(),
+                                                        SimpleLogger::getMaxPayloadLogSize())
+                                    << " (at ds: " << Waiter::ds << ")";
+            }
+
+            enableStreaming();
+        }
+    }
+    return;
+}
+
 void MegaClient::handleScChannel()
 {
-    return handleScNonStreaming();
+    if (!pendingscUserAlerts && pendingsc)
+    {
+        if (!jsonsc.pos && !scStreamingParser.hasStarted())
+        {
+            chooseScParsingMode();
+        }
+
+        return isStreamingEnabled() ? handleScInStreaming() : handleScNonStreaming();
+    }
 }
 
 void MegaClient::handleScNonStreaming()
 {
-    if (!jsonsc.pos && !pendingscUserAlerts && pendingsc)
+    if (!jsonsc.pos)
     {
-#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
-        if (globalMegaTestHooks.interceptSCRequest)
-        {
-            globalMegaTestHooks.interceptSCRequest(pendingsc);
-        }
-#endif
-
         switch (static_cast<reqstatus_t>(pendingsc->status))
         {
             case REQ_SUCCESS:
                 pendingscTimedOut = false;
-                if (pendingsc->contentlength == 1 && pendingsc->in.size() &&
-                    pendingsc->in[0] == '0')
+
+                if (handleScKeepAliveInSuccessState())
                 {
-                    LOG_debug << "SC keep-alive received";
-                    pendingsc.reset();
-                    btsc.reset();
                     break;
                 }
 
@@ -25077,17 +25277,7 @@ void MegaClient::handleScNonStreaming()
                 break;
 
             case REQ_INFLIGHT:
-                if (!pendingscTimedOut &&
-                    Waiter::ds >= (pendingsc->lastdata + HttpIO::SCREQUESTTIMEOUT))
-                {
-                    LOG_debug << clientname << "sc timeout expired at ds: " << Waiter::ds
-                              << " and lastdata ds: " << pendingsc->lastdata;
-                    // In almost all cases the server won't take more than SCREQUESTTIMEOUT seconds.
-                    // But if it does, break the cycle of endless requests for the same thing
-                    pendingscTimedOut = true;
-                    pendingsc.reset();
-                    btsc.reset();
-                }
+                handleScTimeoutInFlightState();
                 break;
             default:
                 break;
@@ -25111,13 +25301,21 @@ void MegaClient::processScMessageNonStreaming()
 
             // upon reception of action packets, if the cs request is waiting for a retry
             // and it failed due to -3 or -4 error from API, we can abort the backoff
-            if (reqs.retryReasonIsApi())
-            {
-                btcs.reset();
-            }
+            abortBackoffTimerForCsRequest();
         }
     }
     return;
+}
+
+bool MegaClient::handleScKeepAliveInSuccessState()
+{
+    if (pendingsc->contentlength == 1 && pendingsc->in.size() && pendingsc->in[0] == '0')
+    {
+        LOG_debug << "SC keep-alive received";
+        resetScRequest();
+        return true;
+    }
+    return false;
 }
 
 void MegaClient::handleScErrorInSuccessState()
@@ -25249,6 +25447,136 @@ void MegaClient::handleScInFailureState()
         btsc.backoff();
         LOG_debug << clientname << "sc backing off with delay ds: " << btsc.retryin();
     }
+    return;
+}
+
+bool MegaClient::handleScTimeoutInFlightState()
+{
+    if (!pendingscTimedOut && Waiter::ds >= (pendingsc->lastdata + HttpIO::SCREQUESTTIMEOUT))
+    {
+        LOG_debug << clientname << "sc timeout expired at ds: " << Waiter::ds
+                  << " and lastdata ds: " << pendingsc->lastdata;
+        // In almost all cases the server won't take more than SCREQUESTTIMEOUT seconds.
+        // But if it does, break the cycle of endless requests for the same thing
+        pendingscTimedOut = true;
+        resetScRequest();
+        return true;
+    }
+    return false;
+}
+
+void MegaClient::handleScInStreaming()
+{
+#ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
+    if (megaTestHooks.interceptSCChunk)
+    {
+        megaTestHooks.interceptSCChunk(pendingsc);
+    }
+#endif
+
+    switch (static_cast<reqstatus_t>(pendingsc->status))
+    {
+        case REQ_SUCCESS:
+            pendingscTimedOut = false;
+
+            if (handleScKeepAliveInSuccessState())
+            {
+                assert(!scStreamingParser.hasStarted() &&
+                       "Keep-alive packet between actionpacket chunks");
+                break;
+            }
+
+            if (scStreamingParser.hasStarted() || *pendingsc->in.c_str() == '{')
+            {
+                // There are two scenarios:
+                // 1. received one complete JSON message
+                // 2. recevied the last chunk of the JSON message
+                setStreamingContinue();
+                break;
+            }
+            else
+            {
+                // Clear the streaming parser before handling the error, because clearing
+                // may commit to the DB, which must happen before scsn is stopped.
+                clearStreamingParser();
+                handleScErrorInSuccessState();
+            }
+
+            [[fallthrough]];
+        case REQ_FAILURE:
+            // Clear the streaming parser before handling the failure, because clearing
+            // may commit to the DB, which must happen before scsn is stopped.
+            clearStreamingParser();
+            handleScInFailureState();
+            break;
+
+        case REQ_INFLIGHT:
+            if (handleScTimeoutInFlightState())
+            {
+                clearStreamingParser();
+            }
+            else
+            {
+                // This indicates there's new chunk of data received
+                if (pendingsc->bufpos > pendingsc->notifiedbufpos)
+                {
+                    mStreamingContinue = true;
+                    pendingsc->notifiedbufpos = pendingsc->bufpos;
+                }
+            }
+
+            break;
+        default:
+            break;
+    }
+    processScMessageInStreaming();
+    return;
+}
+
+void MegaClient::processScMessageInStreaming()
+{
+    if (mStreamingContinue && !scpaused)
+    {
+        m_off_t consumed = scStreamingParser.process(pendingsc->data());
+        // In case the logic changed
+        assert(consumed >= 0);
+        if (consumed)
+        {
+            pendingsc->purge(static_cast<size_t>(consumed));
+        }
+
+        // Check if we should stop processing, either because:
+        // 1. Data was consumed and parser is not paused
+        // 2. Parser has finished or failed (even if consumed is 0)
+        if (!scStreamingParser.isPaused())
+        {
+            mStreamingContinue = false;
+            if (scStreamingParser.isLastReceived())
+            {
+                if (!scStreamingParser.isFinished() && !scStreamingParser.isFailed())
+                {
+                    // This means we received the last part of whole JSON(action packets)
+                    // But JSONSplitter did not end the process properly
+                    LOG_warn << "Incompleted SC response detected";
+                }
+
+                clearStreamingParser();
+                resetScRequest();
+
+                abortBackoffTimerForCsRequest();
+            }
+        }
+    }
+    return;
+}
+
+void MegaClient::setStreamingContinue()
+{
+    mStreamingContinue = true;
+    scStreamingParser.setLastReceived();
+    app->notify_network_activity(NetworkActivityChannel::SC,
+                                 NetworkActivityType::REQUEST_RECEIVED,
+                                 API_OK);
     return;
 }
 

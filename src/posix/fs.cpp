@@ -1592,13 +1592,22 @@ void PosixFileSystemAccess::statsid(string *id) const
     try
     {
         JNIEnv *env;
-        MEGAjvm->AttachCurrentThread(&env, NULL);
+        jint env_status = MEGAjvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+        if (env_status == JNI_EDETACHED)
+        {
+            MEGAjvm->AttachCurrentThread(&env, NULL);
+        }
+        auto envGuard = makeScopedDestructor(
+            [env_status]()
+            {
+                if (env_status == JNI_EDETACHED)
+                    MEGAjvm->DetachCurrentThread();
+            });
         jclass appGlobalsClass = env->FindClass("android/app/AppGlobals");
         if (!appGlobalsClass)
         {
             env->ExceptionClear();
             LOG_err << "Failed to get android/app/AppGlobals";
-            MEGAjvm->DetachCurrentThread();
             return;
         }
 
@@ -1607,15 +1616,19 @@ void PosixFileSystemAccess::statsid(string *id) const
         {
             env->ExceptionClear();
             LOG_err << "Failed to get getInitialApplication()";
-            MEGAjvm->DetachCurrentThread();
             return;
         }
 
         jobject context = env->CallStaticObjectMethod(appGlobalsClass, getInitialApplicationMID);
+        if (env->ExceptionCheck())
+        {
+            env->ExceptionClear();
+            LOG_err << "Exception getting initial application";
+            return;
+        }
         if (!context)
         {
             LOG_err << "Failed to get context";
-            MEGAjvm->DetachCurrentThread();
             return;
         }
 
@@ -1623,7 +1636,6 @@ void PosixFileSystemAccess::statsid(string *id) const
         if (!contextClass)
         {
             LOG_err << "Failed to get context class";
-            MEGAjvm->DetachCurrentThread();
             return;
         }
 
@@ -1632,15 +1644,19 @@ void PosixFileSystemAccess::statsid(string *id) const
         {
             env->ExceptionClear();
             LOG_err << "Failed to get getContentResolver()";
-            MEGAjvm->DetachCurrentThread();
             return;
         }
 
         jobject contentResolver = env->CallObjectMethod(context, getContentResolverMID);
+        if (env->ExceptionCheck())
+        {
+            env->ExceptionClear();
+            LOG_err << "Exception getting ContentResolver";
+            return;
+        }
         if (!contentResolver)
         {
             LOG_err << "Failed to get ContentResolver";
-            MEGAjvm->DetachCurrentThread();
             return;
         }
 
@@ -1649,7 +1665,6 @@ void PosixFileSystemAccess::statsid(string *id) const
         {
             env->ExceptionClear();
             LOG_err << "Failed to get Settings.Secure class";
-            MEGAjvm->DetachCurrentThread();
             return;
         }
 
@@ -1658,7 +1673,6 @@ void PosixFileSystemAccess::statsid(string *id) const
         {
             env->ExceptionClear();
             LOG_err << "Failed to get getString()";
-            MEGAjvm->DetachCurrentThread();
             return;
         }
 
@@ -1666,16 +1680,21 @@ void PosixFileSystemAccess::statsid(string *id) const
         if (!idStr)
         {
             LOG_err << "Failed to get idStr";
-            MEGAjvm->DetachCurrentThread();
             return;
         }
 
         jstring androidId = (jstring) env->CallStaticObjectMethod(settingsSecureClass, getStringMID, contentResolver, idStr);
+        if (env->ExceptionCheck())
+        {
+            env->ExceptionClear();
+            LOG_err << "Exception getting android_id";
+            env->DeleteLocalRef(idStr);
+            return;
+        }
         if (!androidId)
         {
             LOG_err << "Failed to get android_id";
             env->DeleteLocalRef(idStr);
-            MEGAjvm->DetachCurrentThread();
             return;
         }
 
@@ -1684,22 +1703,16 @@ void PosixFileSystemAccess::statsid(string *id) const
         {
             LOG_err << "Failed to get android_id bytes";
             env->DeleteLocalRef(idStr);
-            MEGAjvm->DetachCurrentThread();
             return;
         }
 
         id->append(androidIdString);
         env->DeleteLocalRef(idStr);
         env->ReleaseStringUTFChars(androidId, androidIdString);
-        MEGAjvm->DetachCurrentThread();
     }
     catch (...)
     {
-        try
-        {
-            MEGAjvm->DetachCurrentThread();
-        }
-        catch (...) { }
+        // envGuard destructor handles detach during stack unwinding
     }
 #elif TARGET_OS_IPHONE
 #ifdef USE_IOS
@@ -2302,10 +2315,7 @@ static std::string deviceOf(const std::string& database,
 static std::string deviceOf(const std::string& path)
 {
     // Which mount databases should we search?
-    static const std::vector<std::string> databases = {
-        "/proc/mounts",
-        "/etc/mtab"
-    }; // databases
+    static const char* const databases[] = {"/proc/mounts", "/etc/mtab"}; // databases
 
     // Try and determine which device contains path.
     for (const auto& database : databases)

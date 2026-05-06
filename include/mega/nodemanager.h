@@ -216,16 +216,6 @@ public:
         return mExcludeSensitive != BoolFilter::disabled;
     }
 
-    void includeVersions(const bool includeVersions)
-    {
-        mIncludeVersions = includeVersions;
-    }
-
-    bool includeVersions() const
-    {
-        return mIncludeVersions;
-    }
-
     bool isValidNodeType(const nodetype_t nodeType) const;
     bool isValidCreationTime(const int64_t time) const;
     bool isValidModificationTime(const int64_t time) const;
@@ -252,7 +242,6 @@ private:
     TextPattern mTagFilter;
     bool mTagFilterContainsSeparator{false};
     bool mUseAndForTextQuery{true};
-    bool mIncludeVersions{false};
 
     static bool isDocType(const MimeType_t t);
     static bool isVisualMediaType(const MimeType_t t);
@@ -275,6 +264,32 @@ struct NodeSearchLexicographicalOffset
     std::string mLastName;
     std::optional<int> mLastType;
     std::optional<handle> mLastHandle;
+};
+
+/**
+ * @brief Cursor position for stable cursor-based pagination in listAllNodesByPage().
+ *
+ * Build this from the last Node returned in the previous page.
+ * Which optional fields must be populated depends on the sort order:
+ *   - ORDER_DEFAULT_ASC / ORDER_DEFAULT_DESC : only mLastName, mLastHandle needed
+ *   - ORDER_SIZE_ASC    / ORDER_SIZE_DESC    : also mLastSize
+ *   - ORDER_MODIFICATION_ASC / _DESC         : also mLastMtime
+ *   - ORDER_LABEL_ASC / ORDER_LABEL_DESC     : also mLastLabel
+ *   - ORDER_FAV_ASC   / ORDER_FAV_DESC       : also mLastFav
+ *
+ * Note on ORDER_FAV_ASC / ORDER_FAV_DESC:
+ *   ORDER_FAV_ASC  – favourites appear FIRST  (SQL: ORDER BY fav DESC, name ASC)
+ *   ORDER_FAV_DESC – favourites appear LAST   (SQL: ORDER BY fav ASC,  name ASC)
+ */
+struct NodeSearchCursorOffset
+{
+    std::string mLastName;
+    handle mLastHandle = mega::UNDEF;
+
+    std::optional<int64_t> mLastSize; ///< sizeVirtual for SIZE sorts
+    std::optional<int64_t> mLastMtime; ///< mtime for MODIFICATION sorts
+    std::optional<int> mLastLabel; ///< label value for LABEL_ASC / LABEL_DESC
+    std::optional<int> mLastFav; ///< fav flag for FAV_ASC / FAV_DESC
 };
 
 /**
@@ -309,9 +324,7 @@ public:
     std::shared_ptr<Node> getNodeByHandle(NodeHandle handle);
 
     // read children from DB and load them in memory
-    sharedNode_list getChildren(const Node* parent,
-                                CancelToken cancelToken = CancelToken(),
-                                bool includeVersions = false);
+    sharedNode_list getChildren(const Node* parent, CancelToken cancelToken = CancelToken());
 
     sharedNode_vector getChildren(const NodeSearchFilter& filter, int order, CancelToken cancelFlag, const NodeSearchPage& page);
 
@@ -334,6 +347,35 @@ public:
         CancelToken cancelFlag,
         const size_t maxElements,
         const std::optional<NodeSearchLexicographicalOffset>& offset);
+
+    /**
+     * @brief List all nodes (or all nodes of a given type) using cursor-based pagination.
+     *
+     * This is a simple flat query over the entire nodes table – no recursive CTE, no subtree
+     * restriction.  It is intended for mobile pagination scenarios where offset-based paging
+     * would silently skip items when nodes are deleted between pages.
+     *
+     * @param order       One of ORDER_DEFAULT_ASC/DESC, ORDER_SIZE_ASC/DESC,
+     *                    ORDER_MODIFICATION_ASC/DESC, ORDER_LABEL_ASC/DESC, ORDER_FAV_ASC/DESC.
+     * @param cancelFlag  Optional cancellation token.
+     * @param maxElements Page size (0 = no limit).
+     * @param cursor      Cursor built from the last node of the previous page, or std::nullopt
+     *                    for the first page.  The fields that must be populated depend on the
+     *                    sort order – see NodeSearchCursorOffset.
+     * @return            Vector of matching nodes.
+     */
+    sharedNode_vector listAllNodesByPage(MimeType_t mimeType,
+                                         int order,
+                                         CancelToken cancelFlag,
+                                         size_t maxElements,
+                                         const std::optional<NodeSearchCursorOffset>& cursor);
+
+    sharedNode_vector
+        listAllNodesByPage_internal(MimeType_t mimeType,
+                                    int order,
+                                    CancelToken cancelFlag,
+                                    size_t maxElements,
+                                    const std::optional<NodeSearchCursorOffset>& cursor);
 
     /*
      * @brief
@@ -626,7 +668,10 @@ private:
     // If a valid object is passed, it must be kept alive until this method returns.
     sharedNode_vector processUnserializedNodes(const std::vector<std::pair<NodeHandle, NodeSerialized>>& nodesFromTable, NodeHandle ancestorHandle = NodeHandle(), CancelToken cancelFlag = CancelToken());
 
-    sharedNode_vector searchNodes_internal(const NodeSearchFilter& filter, int order, CancelToken cancelFlag, const NodeSearchPage& page);
+    sharedNode_vector searchNodes_internal(const NodeSearchFilter& filter,
+                                           int order,
+                                           CancelToken cancelFlag,
+                                           const NodeSearchPage& page);
     sharedNode_vector processUnserializedNodes(const std::vector<std::pair<NodeHandle, NodeSerialized>>& nodesFromTable, CancelToken cancelFlag);
     sharedNode_vector getChildren_internal(const NodeSearchFilter& filter, int order, CancelToken cancelFlag, const NodeSearchPage& page);
     sharedNode_vector getRecentNodes_internal(const NodeSearchPage& page, m_time_t since);
@@ -666,8 +711,7 @@ private:
 
     std::shared_ptr<Node> getNodeByHandle_internal(NodeHandle handle);
     sharedNode_list getChildren_internal(const Node* parent,
-                                         CancelToken cancelToken = CancelToken(),
-                                         bool includeVersions = false);
+                                         CancelToken cancelToken = CancelToken());
 
     sharedNode_vector getNodesByFingerprint_internal(const FileFingerprint& fingerprint,
                                                      const bool excludeMtime);

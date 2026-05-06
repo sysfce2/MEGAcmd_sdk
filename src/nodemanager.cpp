@@ -415,17 +415,13 @@ std::shared_ptr<Node> NodeManager::getNodeByHandle_internal(NodeHandle handle)
     return node;
 }
 
-sharedNode_list NodeManager::getChildren(const Node* parent,
-                                         CancelToken cancelToken,
-                                         bool includeVersions)
+sharedNode_list NodeManager::getChildren(const Node* parent, CancelToken cancelToken)
 {
     LockGuard g(mMutex);
-    return getChildren_internal(parent, cancelToken, includeVersions);
+    return getChildren_internal(parent, cancelToken);
 }
 
-sharedNode_list NodeManager::getChildren_internal(const Node* parent,
-                                                  CancelToken cancelToken,
-                                                  bool includeVersions)
+sharedNode_list NodeManager::getChildren_internal(const Node* parent, CancelToken cancelToken)
 {
     assert(mMutex.owns_lock());
 
@@ -482,15 +478,20 @@ sharedNode_list NodeManager::getChildren_internal(const Node* parent,
             }
         }
 
+        // Internal traversal contract (pre-Oct-2023 behavior): return every
+        // direct child, including version nodes of FILENODE parents. Callers
+        // that want version-less results (public MegaApi::getChildren path)
+        // go through NodeManager::getChildren(NodeSearchFilter&, ...) which
+        // uses the DB default skipVersions=true.
         std::vector<std::pair<NodeHandle, NodeSerialized>> nodesFromTable;
         NodeSearchFilter nf;
-        nf.includeVersions(includeVersions);
         nf.byAncestors({parent->nodehandle, UNDEF, UNDEF});
         mTable->getChildren(nf,
                             0 /*Order none*/,
                             nodesFromTable,
                             cancelToken,
-                            NodeSearchPage{0, 0});
+                            NodeSearchPage{0, 0},
+                            /*skipVersions*/ false);
         if (cancelToken.isCancelled())
         {
             childrenList.clear();
@@ -802,7 +803,10 @@ sharedNode_vector NodeManager::searchNodes(const NodeSearchFilter& filter, int o
     return searchNodes_internal(filter, order, cancelFlag, page);
 }
 
-sharedNode_vector NodeManager::searchNodes_internal(const NodeSearchFilter& filter, int order, CancelToken cancelFlag, const NodeSearchPage& page)
+sharedNode_vector NodeManager::searchNodes_internal(const NodeSearchFilter& filter,
+                                                    int order,
+                                                    CancelToken cancelFlag,
+                                                    const NodeSearchPage& page)
 {
     assert(mMutex.owns_lock());
 
@@ -838,6 +842,43 @@ sharedNode_vector NodeManager::searchNodes_internal(const NodeSearchFilter& filt
     sharedNode_vector nodes = processUnserializedNodes(nodesFromTable, cancelFlag);
 
     return nodes;
+}
+
+sharedNode_vector
+    NodeManager::listAllNodesByPage(MimeType_t mimeType,
+                                    int order,
+                                    CancelToken cancelFlag,
+                                    size_t maxElements,
+                                    const std::optional<NodeSearchCursorOffset>& cursor)
+{
+    LockGuard g(mMutex);
+    return listAllNodesByPage_internal(mimeType, order, cancelFlag, maxElements, cursor);
+}
+
+sharedNode_vector
+    NodeManager::listAllNodesByPage_internal(MimeType_t mimeType,
+                                             int order,
+                                             CancelToken cancelFlag,
+                                             size_t maxElements,
+                                             const std::optional<NodeSearchCursorOffset>& cursor)
+{
+    assert(mMutex.owns_lock());
+
+    // validation
+    if (!mTable || mNodes.empty())
+    {
+        assert(mTable && !mNodes.empty());
+        return sharedNode_vector();
+    }
+
+    vector<pair<NodeHandle, NodeSerialized>> nodesFromTable;
+    if (!mTable
+             ->listAllNodesByPage(mimeType, order, nodesFromTable, cancelFlag, maxElements, cursor))
+    {
+        return sharedNode_vector();
+    }
+
+    return processUnserializedNodes(nodesFromTable, cancelFlag);
 }
 
 sharedNode_vector NodeManager::getNodesWithInShares()
@@ -1705,7 +1746,7 @@ void NodeManager::notifyPurge()
                     // so we can avoid lookups for non existing parent handle.
                     removeChild(n->parent.get(), h);
                 }
-                sharedNode_list children = getChildren(n.get());
+                sharedNode_list children = getChildren_internal(n.get());
                 for (auto& child : children)
                 {
                     child->parent = nullptr;

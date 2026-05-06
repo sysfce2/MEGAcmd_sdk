@@ -137,6 +137,7 @@ public:
 class NodeSearchFilter;
 class NodeSearchPage;
 struct NodeSearchLexicographicalOffset;
+struct NodeSearchCursorOffset;
 
 class MEGA_API DBTableNodes
 {
@@ -156,7 +157,12 @@ public:
     virtual bool getNodesByOrigFingerprint(const std::string& fingerprint, std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes) = 0;
 
     virtual uint64_t getNumberOfChildren(NodeHandle parentHandle) = 0;
-    virtual bool getChildren(const NodeSearchFilter& filter, int order, std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes, CancelToken cancelFlag, const NodeSearchPage& page) = 0;
+    virtual bool getChildren(const NodeSearchFilter& filter,
+                             int order,
+                             std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes,
+                             CancelToken cancelFlag,
+                             const NodeSearchPage& page,
+                             const bool skipVersions = true) = 0;
     virtual bool listChildNodesLexicographically(
         const handle parenthandle,
         std::vector<std::pair<NodeHandle, NodeSerialized>>& children,
@@ -223,6 +229,37 @@ public:
     virtual void updateCounter(NodeHandle nodeHandle, const std::string& nodeCounterBlob) = 0;
 
     virtual void updateCounterAndFlags(NodeHandle nodeHandle, uint64_t flags, const std::string& nodeCounterBlob) = 0;
+
+    /**
+     * @brief List all nodes (or all nodes of a specific MIME type) using cursor-based pagination.
+     *
+     * Unlike searchNodes() which traverses subtrees via recursive CTEs, this
+     * method issues a simple flat query against the entire nodes table.  It is intended for mobile
+     * use-cases that need stable, skip-free pagination over all nodes sorted by one of the
+     * supported criteria.
+     *
+     * Supported sort orders (same constants as MegaApi::ORDER_*):
+     *   ORDER_DEFAULT_ASC      / ORDER_DEFAULT_DESC
+     *   ORDER_SIZE_ASC         / ORDER_SIZE_DESC
+     *   ORDER_MODIFICATION_ASC / ORDER_MODIFICATION_DESC
+     *   ORDER_LABEL_ASC        / ORDER_LABEL_DESC
+     *   ORDER_FAV_ASC          / ORDER_FAV_DESC
+     *
+     * @param mimeType    MIME type filter (must not be MIME_TYPE_UNKNOWN).
+     * @param order       One of the ORDER_* constants listed above.
+     * @param nodes       Output vector of (handle, serialised-node) pairs.
+     * @param cancelFlag  Cancellation token.
+     * @param maxElements Page size (0 = no limit).
+     * @param cursor      Cursor derived from the last node of the previous page, or std::nullopt
+     *                    for the first page.
+     * @return true on success, false on DB error.
+     */
+    virtual bool listAllNodesByPage(MimeType_t mimeType,
+                                    int order,
+                                    std::vector<std::pair<NodeHandle, NodeSerialized>>& nodes,
+                                    CancelToken cancelFlag,
+                                    size_t maxElements,
+                                    const std::optional<NodeSearchCursorOffset>& cursor) = 0;
 
     virtual void createIndexes(bool enableIndexesForSearching,
                                bool enableIndexesForLexicographicalList) = 0;
