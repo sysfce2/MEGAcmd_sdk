@@ -8,6 +8,7 @@ vcpkg_from_github(
     PATCHES
         dependencies.diff
         features.diff
+        fix_aac_uninit_num_window_groups.diff
 )
 file(REMOVE_RECURSE "${SOURCE_PATH}/Source/ThirdParty/tinyxml2")
 
