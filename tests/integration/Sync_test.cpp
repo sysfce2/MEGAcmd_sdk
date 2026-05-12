@@ -8529,10 +8529,27 @@ TEST_F(SyncTest, DetectsAndReportsNameClashes)
     ASSERT_EQ(conflicts.size(), 0u);
 
     // Create a remote name clash.
+    // Suspend the sync engine across the two uploads (SDK-5408): otherwise sync may
+    // observe the cloud transition "0 h -> 1 h" between the two putnodes, schedule a
+    // download of /s/d/h, and complete it before the second putnodes' AP arrives.
+    // That leaves a real local h at conflict-detect time, and the SDK correctly
+    // (but undesirably for this assertion) reports it in clashingLocalNames.
+    ASSERT_TRUE(client->disableSync(backupId1,
+                                    NO_SYNC_ERROR,
+                                    /*newEnabledFlag=*/false,
+                                    /*keepSyncDB=*/true));
+
     auto node = client->drillchildnodebyname(client->gettestbasenode(), "x/d");
     ASSERT_TRUE(!!node);
     ASSERT_TRUE(client->uploadFile(root / "d" / "f0", "h", node.get()));
     ASSERT_TRUE(client->uploadFile(root / "d" / "f0", "h", node.get()));
+
+    // Make sure both putnodes APs are landed in the cloud node tree before sync wakes.
+    ASSERT_TRUE(CatchupClients(client));
+
+    // Re-enable sync; the first recursiveSync iteration sees cloudClashingNames = {h, h}
+    // and never visits the "single h" state that would trigger a download.
+    ASSERT_TRUE(client->enableSyncByBackupId(backupId1, "sync1 "));
 
     // Let the client attempt to synchronize.
     waitonsyncs(TIMEOUT, client);
@@ -9049,6 +9066,102 @@ TEST_F(SyncTest, RemotesWithControlCharactersSynchronizeCorrectly)
     model.addfile("x/ff\7", "ff")->fsName("ff%07");
 
     ASSERT_TRUE(cd->confirmModel_mainthread(model.findnode("x"), backupId1));
+}
+
+TEST_F(SyncTest, TrailingDotNamesSynchronizeCorrectly)
+{
+    const auto TESTROOT = makeNewTestRoot();
+    const auto TIMEOUT = chrono::seconds(4);
+
+    StandardClientInUse cd = g_clientManager->getCleanStandardClient(0, TESTROOT);
+    StandardClientInUse cu = g_clientManager->getCleanStandardClient(0, TESTROOT);
+
+    cd->logcb = true;
+    cu->logcb = true;
+
+    ASSERT_TRUE(cu->resetBaseFolderMulticlient(cd));
+    ASSERT_TRUE(cu->makeCloudSubdirs("x", 0, 0));
+    ASSERT_TRUE(CatchupClients(cd, cu));
+
+    const string cloudFolder1 = "d.";
+    const string cloudFolder2 = "dd..";
+    const string cloudFile1 = "f.";
+    const string cloudFile2 = "ff..";
+
+    // Determine if trailing dots are escaped on the local sync filesystem.
+    const auto syncFsType =
+        cd->client.fsaccess->getlocalfstype(LocalPath::fromAbsolutePath(path_u8string(TESTROOT)));
+    LOG_info << "syncFsType: " << cd->client.fsaccess->fstypetostring(syncFsType);
+    const bool syncFsEscapesTrailingDots = cd->client.fsaccess->needsTrailingDotEscape(syncFsType);
+
+    const string localFolder1 = syncFsEscapesTrailingDots ? "d%2e" : cloudFolder1;
+    const string localFolder2 = syncFsEscapesTrailingDots ? "dd%2e%2e" : cloudFolder2;
+    const string localFile1 = syncFsEscapesTrailingDots ? "f%2e" : cloudFile1;
+    const string localFile2 = syncFsEscapesTrailingDots ? "ff%2e%2e" : cloudFile2;
+    const string localUploadFolder = syncFsEscapesTrailingDots ? "ld%2e" : "ld.";
+    const string localUploadFile = syncFsEscapesTrailingDots ? "lf%2e" : "lf.";
+
+    const string cloudUploadFolder = "ld.";
+    const string cloudUploadFile = "lf.";
+
+    // Populate cloud.
+    {
+        auto node = cu->drillchildnodebyname(cu->gettestbasenode(), "x");
+        ASSERT_TRUE(!!node);
+
+        vector<NewNode> nodes(2);
+        cu->prepareOneFolder(&nodes[0], cloudFolder1.c_str(), false);
+        cu->prepareOneFolder(&nodes[1], cloudFolder2.c_str(), false);
+        ASSERT_TRUE(cu->putnodes(node->nodeHandle(), NoVersioning, std::move(nodes)));
+
+        const auto root = cu->fsBasePath / "x";
+        ASSERT_TRUE(fs::create_directories(root));
+
+        ASSERT_TRUE(createNameFile(root, "payload"));
+        ASSERT_TRUE(cu->uploadFile(root / "payload", cloudFile1, node.get()));
+        ASSERT_TRUE(cu->uploadFile(root / "payload", cloudFile2, node.get()));
+    }
+
+    // Add and start sync.
+    handle backupId = cd->setupSync_mainthread("sd", "x", false, false);
+    ASSERT_NE(backupId, UNDEF);
+
+    // Wait for initial sync to complete.
+    waitonsyncs(TIMEOUT, cd);
+
+    // Populate and confirm model (downsync).
+    Model model;
+
+    auto* folder1 = model.addfolder("x/" + cloudFolder1);
+    auto* folder2 = model.addfolder("x/" + cloudFolder2);
+    auto* file1 = model.addfile("x/" + cloudFile1, "payload");
+    auto* file2 = model.addfile("x/" + cloudFile2, "payload");
+
+    folder1->fsName(localFolder1);
+    folder2->fsName(localFolder2);
+    file1->fsName(localFile1);
+    file2->fsName(localFile2);
+
+    model.ensureLocalDebrisTmpLock("x");
+    ASSERT_TRUE(cd->confirmModel_mainthread(model.findnode("x"), backupId));
+
+    // Create local nodes that should upload to trailing-dot names.
+    const auto syncRoot = cd->syncSet(backupId).localpath;
+
+    ASSERT_TRUE(fs::create_directories(syncRoot / u8path_compat(localUploadFolder)));
+    ASSERT_TRUE(createFile(syncRoot / u8path_compat(localUploadFile), "data"));
+    cd->triggerPeriodicScanEarly(backupId);
+
+    // Wait for upload to complete.
+    waitonsyncs(TIMEOUT, cd);
+
+    auto* uploadFolder = model.addfolder("x/" + cloudUploadFolder);
+    auto* uploadFile = model.addfile("x/" + cloudUploadFile, "data");
+
+    uploadFolder->fsName(localUploadFolder);
+    uploadFile->fsName(localUploadFile);
+
+    ASSERT_TRUE(cd->confirmModel_mainthread(model.findnode("x"), backupId));
 }
 
 // this test contains tests for % being escaped from cloud->local which we are undoing for now on this branch

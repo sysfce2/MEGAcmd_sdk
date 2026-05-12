@@ -3998,12 +3998,11 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
  * - [MEGARequest numDetails] - Returns the longitude, scaled to integer in the range of [0, 2^24]
  * - [MEGARequest transferTag] - Returns the latitude, scaled to integer in the range of [0, 2^24)
  *
- * @param node MEGANode that will receive the information.
+ * @param nodeHandle handle of the MEGANode that will receive the information.
  * @param latitude Latitude in signed decimal degrees notation.
  * @param longitude Longitude in signed decimal degrees notation.
- * @param delegate Delegate to track this request.
  */
-- (void)setUnshareableNodeCoordinates:(MEGANode *)node latitude:(double)latitude longitude:(double)longitude delegate:(id<MEGARequestDelegate>)delegate;
+- (void)setUnshareableCoordinatesForNodeHandle:(MEGAHandle)nodeHandle latitude:(double)latitude longitude:(double)longitude;
 
 /**
  * @brief Set the GPS coordinates of image files as a node attribute.
@@ -4022,11 +4021,12 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
  * - [MEGARequest numDetails] - Returns the longitude, scaled to integer in the range of [0, 2^24]
  * - [MEGARequest transferTag] - Returns the latitude, scaled to integer in the range of [0, 2^24)
  *
- * @param node MEGANode that will receive the information.
+ * @param nodeHandle handle of the MEGANode that will receive the information.
  * @param latitude Latitude in signed decimal degrees notation.
  * @param longitude Longitude in signed decimal degrees notation.
+ * @param delegate Delegate to track this request.
  */
-- (void)setUnshareableNodeCoordinates:(MEGANode *)node latitude:(double)latitude longitude:(double)longitude;
+- (void)setUnshareableCoordinatesForNodeHandle:(MEGAHandle)nodeHandle latitude:(double)latitude longitude:(double)longitude delegate:(id<MEGARequestDelegate>)delegate;
 
 /**
  * @brief Generate a public link of a file/folder in MEGA.
@@ -6597,83 +6597,6 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
 - (void)startUploadForSupportWithLocalPath:(NSString *)localPath isSourceTemporary:(BOOL)isSourceTemporary;
 
 /**
- * @brief Upload a file or a folder
- *
- * If the status of the business account is expired, onTransferFinish will be called with the error
- * code MEGAErrorTypeApiEBusinessPastDue. In this case, apps should show a warning message similar to
- * "Your business account is overdue, please contact your administrator."
- *
- * In case any other folder is being uploaded/downloaded, and [MEGATransfer stage] for that transfer returns
- * a value between the following stages: MEGATransferStageScan and MEGATransferStageProcessTransferQueue
- * both included, don't use [MEGASDK cancelTransfer] to cancel this transfer (it could generate a deadlock),
- * instead of that, use [MEGACancelToken cancel] calling through MEGACancelToken instance associated to this transfer.
- *
- * For more information about MegaTransfer stages please refer to onTransferUpdate documentation.
- *
- * @param localPath Local path of the file or folder
- * @param parent Parent node for the file or folder in the MEGA account
- * @param appData Custom app data to save in the MegaTransfer object
- * The data in this parameter can be accessed using [MEGATransfer appData] in delegates
- * related to the transfer. If a transfer is started with exactly the same data
- * (local path and target parent) as another one in the transfer queue, the new transfer
- * fails with the error MEGAErrorTypeApiEExist and the appData of the new transfer is appended to
- * the appData of the old transfer, using a '!' separator if the old transfer had already
- * appData.
- *  + If you don't need this param provide NULL as value
- * @param fileName Custom file name for the file or folder in MEGA
- *  + If you don't need this param provide NULL as value
- * @param isSourceTemporary Pass the ownership of the file to the SDK, that will DELETE it when the upload finishes.
- * This parameter is intended to automatically delete temporary files that are only created to be uploaded.
- * Use this parameter with caution. Set it to true only if you are sure about what are you doing.
- *  + If you don't need this param provide false as value
- * @param startFirst puts the transfer on top of the upload queue
- *  + If you don't need this param provide false as value
- * @param cancelToken MEGACancelToken to be able to cancel a folder/file upload process.
- * This param is required to be able to cancel the transfer safely by calling [MEGACancelToken cancel]
- * You preserve the ownership of this param.
- */
-- (void)startUploadWithLocalPath:(NSString *)localPath parent:(MEGANode *)parent fileName:(nullable NSString *)fileName appData:(nullable NSString *)appData isSourceTemporary:(BOOL)isSourceTemporary startFirst:(BOOL)startFirst cancelToken:(nullable MEGACancelToken *)cancelToken;
-
-/**
- * @brief Upload a file or a folder
- *
- * If the status of the business account is expired, onTransferFinish will be called with the error
- * code MEGAErrorTypeApiEBusinessPastDue. In this case, apps should show a warning message similar to
- * "Your business account is overdue, please contact your administrator."
- *
- * In case any other folder is being uploaded/downloaded, and [MEGATransfer stage] for that transfer returns
- * a value between the following stages: MEGATransferStageScan and MEGATransferStageProcessTransferQueue
- * both included, don't use [MEGASDK cancelTransfer] to cancel this transfer (it could generate a deadlock),
- * instead of that, use [MEGACancelToken cancel] calling through MEGACancelToken instance associated to this transfer.
- *
- * For more information about MegaTransfer stages please refer to onTransferUpdate documentation.
- *
- * @param localPath Local path of the file or folder
- * @param parent Parent node for the file or folder in the MEGA account
- * @param appData Custom app data to save in the MegaTransfer object
- * The data in this parameter can be accessed using [MEGATransfer appData] in delegates
- * related to the transfer. If a transfer is started with exactly the same data
- * (local path and target parent) as another one in the transfer queue, the new transfer
- * fails with the error MEGAErrorTypeApiEExist and the appData of the new transfer is appended to
- * the appData of the old transfer, using a '!' separator if the old transfer had already
- * appData.
- *  + If you don't need this param provide NULL as value
- * @param fileName Custom file name for the file or folder in MEGA
- *  + If you don't need this param provide NULL as value
- * @param isSourceTemporary Pass the ownership of the file to the SDK, that will DELETE it when the upload finishes.
- * This parameter is intended to automatically delete temporary files that are only created to be uploaded.
- * Use this parameter with caution. Set it to true only if you are sure about what are you doing.
- *  + If you don't need this param provide false as value
- * @param startFirst puts the transfer on top of the upload queue
- *  + If you don't need this param provide false as value
- * @param cancelToken MEGACancelToken to be able to cancel a folder/file upload process.
- * This param is required to be able to cancel the transfer safely by calling [MEGACancelToken cancel]
- * You preserve the ownership of this param.
- * @param delegate MEGATransferDelegate to track this transfer
- */
-- (void)startUploadWithLocalPath:(NSString *)localPath parent:(MEGANode *)parent fileName:(nullable NSString *)fileName appData:(nullable NSString *)appData isSourceTemporary:(BOOL)isSourceTemporary startFirst:(BOOL)startFirst cancelToken:(nullable MEGACancelToken *)cancelToken delegate:(id<MEGATransferDelegate>)delegate;
-
-/**
  * @brief Upload a file or a folder.
  *
  * This method starts an upload transfer for a local file or folder into the specified
@@ -7099,6 +7022,87 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
  *
  */
 - (void)cancelTransfersForDirection:(NSInteger)direction;
+
+/**
+ * @brief Set the maximum number of connections per transfer for a specific direction.
+ *
+ * The maximum number of allowed connections is 100. If a higher number of connections is
+ * passed to this function, it will fail with the error code MEGAErrorTypeApiETooMany.
+ *
+ * The associated request type with this request is MEGARequestTypeSetMaxConnections.
+ * Valid data in the MEGARequest object received on callbacks:
+ * - [MEGARequest paramType] - Returns the value for direction parameter
+ * - [MEGARequest number] - Returns the requested value for connections
+ *
+ * Possible error codes on request finish are:
+ * - MEGAErrorTypeApiEArgs if direction is invalid or connections is smaller than 1
+ * - MEGAErrorTypeApiETooMany if connections is greater than 100
+ * - MEGAErrorTypeApiEWrite if the live value was updated but the new
+ *   persisted value could not be stored
+ *
+ * The value is persisted per SDK base path and restored on subsequent
+ * SDK instances.
+ *
+ * @param direction Direction of transfers.
+ * Valid values for this parameter are:
+ * - MEGATransferTypeDownload
+ * - MEGATransferTypeUpload
+ * @param connections Maximum number of connections (it should be between 1 and 100).
+ * @param delegate Delegate to track this request.
+ */
+- (void)setMaxConnectionsForDirection:(MEGATransferType)direction connections:(NSInteger)connections delegate:(id<MEGARequestDelegate>)delegate;
+
+/**
+ * @brief Set the maximum number of connections per transfer for a specific direction.
+ *
+ * The maximum number of allowed connections is 100. If a higher number of connections is
+ * passed to this function, it will fail with the error code MEGAErrorTypeApiETooMany.
+ *
+ * The associated request type with this request is MEGARequestTypeSetMaxConnections.
+ * Valid data in the MEGARequest object received on callbacks:
+ * - [MEGARequest paramType] - Returns the value for direction parameter
+ * - [MEGARequest number] - Returns the requested value for connections
+ *
+ * Possible error codes on request finish are:
+ * - MEGAErrorTypeApiEArgs if direction is invalid or connections is smaller than 1
+ * - MEGAErrorTypeApiETooMany if connections is greater than 100
+ * - MEGAErrorTypeApiEWrite if the live value was updated but the new
+ *   persisted value could not be stored
+ *
+ * The value is persisted per SDK base path and restored on subsequent
+ * SDK instances.
+ *
+ * @param direction Direction of transfers.
+ * Valid values for this parameter are:
+ * - MEGATransferTypeDownload
+ * - MEGATransferTypeUpload
+ * @param connections Maximum number of connections (it should be between 1 and 100).
+ */
+- (void)setMaxConnectionsForDirection:(MEGATransferType)direction connections:(NSInteger)connections;
+
+/**
+ * @brief Get the maximum number of connections per upload transfer.
+ *
+ * The associated request type with this request is MEGARequestTypeGetMaxConnections.
+ * Valid data in the MEGARequest object received on callbacks:
+ * - [MEGARequest paramType] - Returns the value for transfer direction (PUT)
+ * - [MEGARequest number] - Returns the max number of connections for uploads.
+ *
+ * @param delegate Delegate to track this request.
+ */
+- (void)getMaxUploadConnectionsWithDelegate:(id<MEGARequestDelegate>)delegate;
+
+/**
+ * @brief Get the maximum number of connections per download transfer.
+ *
+ * The associated request type with this request is MEGARequestTypeGetMaxConnections.
+ * Valid data in the MEGARequest object received on callbacks:
+ * - [MEGARequest paramType] - Returns the value for transfer direction (GET)
+ * - [MEGARequest number] - Returns the max number of connections for downloads.
+ *
+ * @param delegate Delegate to track this request.
+ */
+- (void)getMaxDownloadConnectionsWithDelegate:(id<MEGARequestDelegate>)delegate;
 
 /**
  * @brief Cancel the transfer with a specific tag
@@ -8443,6 +8447,29 @@ typedef NS_ENUM(NSInteger, PasswordManagerNodeType) {
  * @param enable YES to keep public key pinning enabled, NO to disable it
  */
 - (void)setPublicKeyPinning:(BOOL)enable;
+
+/**
+ * @brief Enable / disable the platform-native available-disk-space query.
+ *
+ * When enabled on iOS, the SDK uses Foundation's
+ * NSURLVolumeAvailableCapacityForImportantUsageKey for disk-space checks,
+ * which accounts for purgeable storage the system can reclaim for
+ * user-requested downloads. When disabled, the SDK uses its default
+ * statfs-based path.
+ *
+ * Disabled by default. The setting is process-wide: it affects every
+ * MEGASdk instance in the same process.
+ *
+ * @param enable YES to use the platform-native query, NO to always use the
+ * default path.
+ */
+- (void)setUsePlatformAvailableDiskSpaceQuery:(BOOL)enable;
+
+/**
+ * @brief Returns whether the platform-native available-disk-space query is
+ * enabled.
+ */
+- (BOOL)usePlatformAvailableDiskSpaceQuery;
 
 /**
  * @brief Create a thumbnail for an image

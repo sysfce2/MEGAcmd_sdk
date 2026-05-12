@@ -34,6 +34,7 @@ target_sources(test_integration
     one_question_survey_test.cpp
     integration_test_utils.cpp
     DisableBackupSync_test.cpp
+    SdkTestPersistConnections_test.cpp
     SdkTestTransferMaxSpeeds_test.cpp
     sdk_test_file_path.cpp
     sdk_test_node_tags.cpp
@@ -50,6 +51,7 @@ target_sources(test_integration
     backup_sync_operations_test.cpp
     sdk_test_lockless_cs_channel.cpp
     sdk_test_pitag.cpp
+    sdk_test_sc_channel.cpp
     SdkTestFolderController_test.cpp
     SdkTestGetChildrenLexicographic_test.cpp
     SdkTestListAllNodesByPage_test.cpp
@@ -91,6 +93,24 @@ include(file_service/file_service.cmake)
 
 # Link with SDKlib
 target_link_libraries(test_integration PRIVATE MEGA::SDKlib)
+
+# The SdkTestPersistConnections fixture opens the device-wide prefs DB
+# directly via sqlite3_open to tamper an out-of-range value the public API can
+# never write, exercising MegaClient::loadPersistedConnections' guard. Mirror
+# the two-branch SDKlib pattern in cmake/modules/sdklib_libraries.cmake.
+if(VCPKG_ROOT)
+    if(IOS)
+        find_package(SQLite3 REQUIRED)
+        target_link_libraries(test_integration PRIVATE SQLite::SQLite3)
+    else()
+        find_package(unofficial-sqlite3 REQUIRED)
+        target_link_libraries(test_integration PRIVATE unofficial::sqlite3::sqlite3)
+    endif()
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(sqlite3_it REQUIRED IMPORTED_TARGET sqlite3)
+    target_link_libraries(test_integration PRIVATE PkgConfig::sqlite3_it)
+endif()
 
 # Link with the common and tools interface libraries for the tests.
 target_link_libraries(test_integration

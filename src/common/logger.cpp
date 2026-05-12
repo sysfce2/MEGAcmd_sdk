@@ -50,7 +50,7 @@ void Logger::log(const char* filename,
 {
     // Sanity.
     assert(filename);
-    assert(severity < logMax);
+    assert(severity <= logMax);
 
     // Last minute severity check.
     if (masked(severity))

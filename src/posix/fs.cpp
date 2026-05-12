@@ -107,6 +107,10 @@ extern jclass fileWrapper;
 #define SMB2_MAGIC_NUMBER 0xfe534d42ul
 #endif // ! SMB2_MAGIC_NUMBER
 
+#ifndef EXFAT_SUPER_MAGIC
+#define EXFAT_SUPER_MAGIC 0x2011BAB0
+#endif
+
 #endif /* __linux__ */
 
 #if defined(__APPLE__) || defined(USE_IOS)
@@ -2590,6 +2594,9 @@ bool PosixFileSystemAccess::getlocalfstype(const LocalPath& path, FileSystemType
             break;
         case MSDOS_SUPER_MAGIC:
             type = FS_FAT32;
+            break;
+        case EXFAT_SUPER_MAGIC:
+            type = FS_EXFAT;
             break;
         case HFS_SUPER_MAGIC:
         case HFSPLUS_SUPER_MAGIC:

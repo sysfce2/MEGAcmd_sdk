@@ -93,6 +93,12 @@ TEST_F(MegaClientTest, isValidLocalSyncRoot_NotAFolder)
     EXPECT_EQ(sWarn, NO_SYNC_WARNING);
 }
 
+TEST_F(MegaClientTest, setMaxConnectionsAndPersistRejectsZero)
+{
+    EXPECT_EQ(client->setmaxconnectionsandpersist(GET, uint8_t{0}), API_EARGS);
+    EXPECT_EQ(client->setmaxconnectionsandpersist(uint8_t{0}), API_EARGS);
+}
+
 #ifdef MEGASDK_DEBUG_TEST_HOOKS_ENABLED
 TEST_F(MegaClientTest, chooseScParsingMode_EnableAndDisableStreaming)
 {

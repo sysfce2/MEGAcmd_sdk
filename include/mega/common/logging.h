@@ -33,6 +33,11 @@ while (0)
 #define LogDebugF(logger, format, ...) \
   LogF((logger), (format), ::mega::logDebug, __VA_ARGS__)
 
+// Emit a verbose message.
+#define LogVerbose1(logger, format) Log1((logger), (format), ::mega::logVerbose)
+
+#define LogVerboseF(logger, format, ...) LogF((logger), (format), ::mega::logVerbose, __VA_ARGS__)
+
 // Emit an info message.
 #define LogInfo1(logger, format) \
   Log1((logger), (format), ::mega::logInfo)

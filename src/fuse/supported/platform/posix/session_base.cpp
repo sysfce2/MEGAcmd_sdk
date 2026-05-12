@@ -48,6 +48,11 @@ SessionBase::Arguments::Arguments([[maybe_unused]] const std::string& name):
     mArguments.argv = &mPointers[0];
 }
 
+SessionBase::Arguments::~Arguments()
+{
+    fuse_opt_free_args(&mArguments);
+}
+
 fuse_args* SessionBase::Arguments::get()
 {
     return &mArguments;

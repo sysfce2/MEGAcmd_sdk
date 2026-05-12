@@ -58,6 +58,7 @@
 
 namespace mega {
 
+class ClientPrefsStore;
 class Logger;
 struct NetworkConnectivityTestResults;
 
@@ -874,11 +875,19 @@ public:
                              std::optional<std::string> inboxTarget);
 
     // maximum number of connections per transfer
-    static const unsigned MAX_NUM_CONNECTIONS = 100;
+    static constexpr uint8_t MAX_NUM_CONNECTIONS{100};
 
     // set max connections per transfer
-    void setmaxconnections(direction_t, int);
+    void setmaxconnections(const direction_t, const int);
+    error setmaxconnectionsandpersist(const direction_t, const uint8_t);
+    error setmaxconnectionsandpersist(const uint8_t);
 
+private:
+    error setmaxconnectionsinternal(const std::optional<direction_t>& direction, const uint8_t num);
+    error persistmaxconnections(const std::optional<direction_t>& direction, const uint8_t num);
+    void applymaxconnections(const direction_t, const uint8_t);
+
+public:
     // updates business status
     void setBusinessStatus(BizStatus newBizStatus);
 
@@ -2038,6 +2047,10 @@ public:
     // DB access
     DbAccess* dbaccess = nullptr;
 
+    // Device-wide preferences store (persistent connections today, more client
+    // preferences can migrate here later without growing MegaClient).
+    std::unique_ptr<ClientPrefsStore> mClientPrefsStore;
+
     // DbTable iface to handle "statecache" for logged in user (implemented at SqliteAccountState object)
     unique_ptr<DbTable> sctable;
 
@@ -2610,6 +2623,7 @@ public:
     bool handleScKeepAliveInSuccessState();
     void handleScErrorInSuccessState();
     void handleScInFailureState();
+    void clearForScError();
     bool handleScTimeoutInFlightState();
 
     // Process actual data from the server-client channel

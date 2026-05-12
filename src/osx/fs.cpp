@@ -1,10 +1,12 @@
+#include "mega.h"
+#include "mega/osx/osxutils.h"
+
 #include <sys/mount.h>
 #include <sys/param.h>
 
 #include <cassert>
 #include <future>
-
-#include "mega.h"
+#include <limits>
 
 // Disk Arbitration is not available on iOS.
 #ifndef USE_IOS
@@ -292,6 +294,30 @@ int MacFileSystemAccess::checkevents(Waiter*)
 {
     // Here until we factor Linux stuff out of PFSA.
     return 0;
+}
+
+m_off_t MacFileSystemAccess::availableDiskSpace(const LocalPath& drivePath)
+{
+#if TARGET_OS_IPHONE
+    if (FileSystemAccess::usePlatformAvailableDiskSpaceQuery())
+    {
+        constexpr auto maximumBytes = std::numeric_limits<m_off_t>::max();
+        const auto bytes = availableDiskSpaceForImportantUsage(detail::adjustBasePath(drivePath));
+        if (bytes && *bytes >= 0 &&
+            static_cast<std::uint64_t>(*bytes) < static_cast<std::uint64_t>(maximumBytes))
+        {
+            return static_cast<m_off_t>(*bytes);
+        }
+        // Foundation query failed or returned an unrepresentable value.
+        // Return the same "unknown" sentinel that PosixFileSystemAccess::
+        // availableDiskSpace uses when statfs fails, so callers see a uniform
+        // signal regardless of which query ran. Silently falling back to
+        // statfs would hand back a different number (no purgeable-storage
+        // accounting) than the toggle asked for.
+        return maximumBytes;
+    }
+#endif
+    return PosixFileSystemAccess::availableDiskSpace(drivePath);
 }
 
 void MacFileSystemAccess::flushDispatchQueue()

@@ -1753,15 +1753,15 @@ using namespace mega;
     }
 }
 
-- (void)setUnshareableNodeCoordinates:(MEGANode *)node latitude:(double)latitude longitude:(double)longitude delegate:(id<MEGARequestDelegate>)delegate {
+- (void)setUnshareableCoordinatesForNodeHandle:(MEGAHandle)nodeHandle latitude:(double)latitude longitude:(double)longitude {
     if (self.megaApi) {
-        self.megaApi->setUnshareableNodeCoordinates(node.getCPtr, latitude, longitude , [self createDelegateMEGARequestListener:delegate singleListener:YES]);
+        self.megaApi->setUnshareableNodeCoordinates(nodeHandle, latitude, longitude);
     }
 }
 
-- (void)setUnshareableNodeCoordinates:(MEGANode *)node latitude:(double)latitude longitude:(double)longitude {
+- (void)setUnshareableCoordinatesForNodeHandle:(MEGAHandle)nodeHandle latitude:(double)latitude longitude:(double)longitude delegate:(id<MEGARequestDelegate>)delegate {
     if (self.megaApi) {
-        self.megaApi->setUnshareableNodeCoordinates(node.getCPtr, latitude, longitude);
+        self.megaApi->setUnshareableNodeCoordinates(nodeHandle, latitude, longitude, [self createDelegateMEGARequestListener:delegate singleListener:YES]);
     }
 }
 
@@ -2600,18 +2600,6 @@ using namespace mega;
     }
 }
 
-- (void)startUploadWithLocalPath:(NSString *)localPath parent:(MEGANode *)parent fileName:(nullable NSString *)fileName appData:(nullable NSString *)appData isSourceTemporary:(BOOL)isSourceTemporary startFirst:(BOOL)startFirst cancelToken:(nullable MEGACancelToken *)cancelToken {
-    if (self.megaApi) {
-        self.megaApi->startUpload(localPath.UTF8String, parent.getCPtr, fileName.UTF8String, MegaApi::INVALID_CUSTOM_MOD_TIME, appData.UTF8String, isSourceTemporary, startFirst, cancelToken.getCPtr);
-    }
-}
-
-- (void)startUploadWithLocalPath:(NSString *)localPath parent:(MEGANode *)parent fileName:(nullable NSString *)fileName appData:(nullable NSString *)appData isSourceTemporary:(BOOL)isSourceTemporary startFirst:(BOOL)startFirst cancelToken:(nullable MEGACancelToken *)cancelToken delegate:(id<MEGATransferDelegate>)delegate {
-    if (self.megaApi) {
-        self.megaApi->startUpload(localPath.UTF8String, parent.getCPtr, fileName.UTF8String, MegaApi::INVALID_CUSTOM_MOD_TIME, appData.UTF8String, isSourceTemporary, startFirst, cancelToken.getCPtr, [self createDelegateMEGATransferListener:delegate singleListener:YES]);
-    }
-}
-
 - (void)startUploadWithLocalPath:(NSString *)localPath
                           parent:(MEGANode *)parent
                      cancelToken:(nullable MEGACancelToken *)cancelToken
@@ -2761,6 +2749,30 @@ using namespace mega;
 - (void)cancelTransfersForDirection:(NSInteger)direction {
     if (self.megaApi) {
         self.megaApi->cancelTransfers((int)direction);
+    }
+}
+
+- (void)setMaxConnectionsForDirection:(MEGATransferType)direction connections:(NSInteger)connections delegate:(id<MEGARequestDelegate>)delegate {
+    if (self.megaApi) {
+        self.megaApi->setMaxConnections((int)direction, (int)connections, [self createDelegateMEGARequestListener:delegate singleListener:YES]);
+    }
+}
+
+- (void)setMaxConnectionsForDirection:(MEGATransferType)direction connections:(NSInteger)connections {
+    if (self.megaApi) {
+        self.megaApi->setMaxConnections((int)direction, (int)connections);
+    }
+}
+
+- (void)getMaxUploadConnectionsWithDelegate:(id<MEGARequestDelegate>)delegate {
+    if (self.megaApi) {
+        self.megaApi->getMaxUploadConnections([self createDelegateMEGARequestListener:delegate singleListener:YES]);
+    }
+}
+
+- (void)getMaxDownloadConnectionsWithDelegate:(id<MEGARequestDelegate>)delegate {
+    if (self.megaApi) {
+        self.megaApi->getMaxDownloadConnections([self createDelegateMEGARequestListener:delegate singleListener:YES]);
     }
 }
 
@@ -3422,6 +3434,16 @@ using namespace mega;
     if (self.megaApi) {
         self.megaApi->setPublicKeyPinning(enable);
     }
+}
+
+- (void)setUsePlatformAvailableDiskSpaceQuery:(BOOL)enable {
+    if (self.megaApi) {
+        self.megaApi->setUsePlatformAvailableDiskSpaceQuery(enable);
+    }
+}
+
+- (BOOL)usePlatformAvailableDiskSpaceQuery {
+    return self.megaApi ? self.megaApi->usePlatformAvailableDiskSpaceQuery() : NO;
 }
 
 - (BOOL)createThumbnail:(NSString *)imagePath destinatioPath:(NSString *)destinationPath {

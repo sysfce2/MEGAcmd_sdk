@@ -20,7 +20,7 @@ using ::testing::ContainerEq;
 
 using CRCLanes = std::array<std::uint32_t, 4>;
 
-constexpr std::uint64_t operator"" _MiB(const unsigned long long n) noexcept
+constexpr std::uint64_t operator""_MiB(const unsigned long long n) noexcept
 {
     return n * 1024ull * 1024ull;
 }

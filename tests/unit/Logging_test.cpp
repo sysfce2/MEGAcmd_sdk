@@ -592,3 +592,193 @@ TEST(Logging, Extract_file_name_from_full_path)
     ASSERT_EQ(0, strcmp(::mega::log_file_leafname("include/mega/logging.h"), "logging.h"));
     ASSERT_EQ(0, strcmp(::mega::log_file_leafname("include\\mega\\logging.h"), "logging.h" ));
 }
+
+namespace
+{
+
+// Emit `obj` through a SimpleLogger, capture via MockLogger, and return the concatenation of all
+// captured pieces with the trailing " [file.cpp:13]" stripped. Works in both performance and
+// non-performance modes because both MockLoggers push into `mMessage`.
+std::string logChunkedAndJoin(const mega::ChunkedDirectMessage& obj)
+{
+    MockLogger logger;
+    const char* const file = "file.cpp";
+    const int line = 13;
+    mega::SimpleLogger{mega::LogLevel::logDebug, file, line} << obj;
+    std::string joined;
+    for (const auto& m: logger.mMessage)
+    {
+        joined += m;
+    }
+    const std::string trailer = " [file.cpp:13]";
+    if (joined.size() >= trailer.size() &&
+        joined.compare(joined.size() - trailer.size(), trailer.size(), trailer) == 0)
+    {
+        joined.resize(joined.size() - trailer.size());
+    }
+    return joined;
+}
+
+} // namespace
+
+TEST(Logging, ChunkedDirectMessage_UnknownSize_ChunkFitsInHead)
+{
+    // maxLogSize=10, chunk [0,9] — fully inside head window.
+    const size_t chunkSize = 10;
+    const std::string data(chunkSize, 'X');
+    const size_t chunkOffset = 0;
+    const int64_t totalSize = -1;
+    const size_t maxLogSize = 10;
+
+    EXPECT_EQ("XXXXXXXXXX",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+}
+
+TEST(Logging, ChunkedDirectMessage_UnknownSize_ChunkExceedsHead)
+{
+    // maxLogSize=10, chunk [0,10] — emit first 10 bytes + "[...]".
+    size_t chunkSize = 11;
+    std::string data(chunkSize, 'X');
+    size_t chunkOffset = 0;
+    const int64_t totalSize = -1;
+    const size_t maxLogSize = 10;
+
+    EXPECT_EQ("XXXXXXXXXX[...]",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+
+    // maxLogSize=10, chunk [9,108] — emit first byte + "[...]".
+    chunkSize = 100;
+    data = std::string(chunkSize, 'X');
+    chunkOffset = 9;
+
+    EXPECT_EQ("X[...]",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+}
+
+TEST(Logging, ChunkedDirectMessage_UnknownSize_ChunkFullyPastHead)
+{
+    // maxLogSize=10, chunk [10,109] — entirely past the head window.
+    const size_t chunkSize = 100;
+    const std::string data(chunkSize, 'X');
+    const size_t chunkOffset = 10;
+    const int64_t totalSize = -1;
+    const size_t maxLogSize = 10;
+
+    EXPECT_EQ("[...]",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+}
+
+TEST(Logging, ChunkedDirectMessage_BodyFitsInMax)
+{
+    // totalSize == maxLogSize, chunk [0,9] — no truncation, emit full chunk.
+    const size_t chunkSize = 10;
+    const std::string data(chunkSize, 'X');
+    const size_t chunkOffset = 0;
+    const int64_t totalSize = 10;
+    const size_t maxLogSize = 10;
+
+    EXPECT_EQ("XXXXXXXXXX",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+}
+
+TEST(Logging, ChunkedDirectMessage_ChunkFullyInHead)
+{
+    // totalSize=20, maxLogSize=10 → headEnd=5, tailStart=15. chunk [0,4].
+    const size_t chunkSize = 5;
+    const std::string data(chunkSize, 'X');
+    const size_t chunkOffset = 0;
+    const int64_t totalSize = 20;
+    const size_t maxLogSize = 10;
+
+    EXPECT_EQ("XXXXX",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+}
+
+TEST(Logging, ChunkedDirectMessage_ChunkFullyInTail)
+{
+    // totalSize=20, maxLogSize=10 → headEnd=5, tailStart=15. chunk [15,19].
+    const size_t chunkSize = 5;
+    const std::string data(chunkSize, 'X');
+    const size_t chunkOffset = 15;
+    const int64_t totalSize = 20;
+    const size_t maxLogSize = 10;
+
+    EXPECT_EQ("XXXXX",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+}
+
+TEST(Logging, ChunkedDirectMessage_ChunkFullyInMiddle)
+{
+    // totalSize=20, maxLogSize=10 → headEnd=5, tailStart=15. Chunk [5,14].
+    const size_t chunkSize = 10;
+    const std::string data(chunkSize, 'X');
+    const size_t chunkOffset = 5;
+    const int64_t totalSize = 20;
+    const size_t maxLogSize = 10;
+
+    EXPECT_EQ("[...]",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+}
+
+TEST(Logging, ChunkedDirectMessage_ChunkStraddlesHeadToMiddle)
+{
+    // totalSize=20, maxLogSize=10 → headEnd=5, tailStart=15. Chunk [4,5].
+    size_t chunkSize = 2;
+    std::string data(chunkSize, 'X');
+    size_t chunkOffset = 4;
+    const int64_t totalSize = 20;
+    const size_t maxLogSize = 10;
+
+    EXPECT_EQ("X[...]",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+
+    // totalSize=20, maxLogSize=10 → headEnd=5, tailStart=15. Chunk [0,14].
+    chunkSize = 15;
+    data = std::string(chunkSize, 'X');
+    chunkOffset = 0;
+
+    EXPECT_EQ("XXXXX[...]",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+}
+
+TEST(Logging, ChunkedDirectMessage_ChunkStraddlesMiddleToTail)
+{
+    // totalSize=20, maxLogSize=10 → headEnd=5, tailStart=15. Chunk [14,15].
+    size_t chunkSize = 2;
+    std::string data(chunkSize, 'X');
+    size_t chunkOffset = 14;
+    const int64_t totalSize = 20;
+    const size_t maxLogSize = 10;
+
+    EXPECT_EQ("[...]X",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+
+    // totalSize=20, maxLogSize=10 → headEnd=5, tailStart=15. Chunk [5,19].
+    chunkSize = 15;
+    data = std::string(chunkSize, 'X');
+    chunkOffset = 5;
+
+    EXPECT_EQ("[...]XXXXX",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+}
+
+TEST(Logging, ChunkedDirectMessage_ChunkStraddlesHeadMiddleAndTail)
+{
+    // totalSize=20, maxLogSize=10 → headEnd=5, tailStart=15. Chunk [4,15].
+    size_t chunkSize = 12;
+    std::string data(chunkSize, 'X');
+    size_t chunkOffset = 4;
+    const int64_t totalSize = 20;
+    const size_t maxLogSize = 10;
+
+    EXPECT_EQ("X[...]X",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+
+    // totalSize=20, maxLogSize=10 → headEnd=5, tailStart=15. Chunk [5,19].
+    chunkSize = 20;
+    data = std::string(chunkSize, 'X');
+    chunkOffset = 0;
+
+    EXPECT_EQ("XXXXX[...]XXXXX",
+              logChunkedAndJoin({data.data(), data.size(), chunkOffset, totalSize, maxLogSize}));
+}

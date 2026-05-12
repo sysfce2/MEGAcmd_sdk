@@ -33,6 +33,7 @@ enum FileSystemType
     FS_SMB = 12,
     FS_SMB2 = 13,
     FS_LIFS = 14,
+    FS_LAST = FS_LIFS,
 };
 
 #ifdef WIN32

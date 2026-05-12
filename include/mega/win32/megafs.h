@@ -66,6 +66,8 @@ public:
                             Waiter* notificationWaiter) override;
 #endif
 
+    bool needsTrailingDotEscape(FileSystemType fileSystemType) const override;
+
     bool issyncsupported(const LocalPath&, bool&, SyncError&, SyncWarning&) override;
 
     bool getsname(const LocalPath&, LocalPath&) const override;

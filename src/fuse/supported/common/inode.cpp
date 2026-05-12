@@ -25,27 +25,27 @@ using fuse::toString;
 
 void LockableTraits<Inode>::acquiring(const Inode& inode)
 {
-    FUSEDebugF("Acquiring lock on inode %s", toString(inode.id()).c_str());
+    FUSEVerboseF("Acquiring lock on inode %s", toString(inode.id()).c_str());
 }
 
 void LockableTraits<Inode>::acquired(const Inode& inode)
 {
-    FUSEDebugF("Acquired lock on inode %s", toString(inode.id()).c_str());
+    FUSEVerboseF("Acquired lock on inode %s", toString(inode.id()).c_str());
 }
 
 void LockableTraits<Inode>::couldntAcquire(const Inode& inode)
 {
-    FUSEDebugF("Couldn't acquire lock on inode %s", toString(inode.id()).c_str());
+    FUSEVerboseF("Couldn't acquire lock on inode %s", toString(inode.id()).c_str());
 }
 
 void LockableTraits<Inode>::released(const Inode& inode)
 {
-    FUSEDebugF("Releasing lock on inode %s", toString(inode.id()).c_str());
+    FUSEVerboseF("Releasing lock on inode %s", toString(inode.id()).c_str());
 }
 
 void LockableTraits<Inode>::tryAcquire(const Inode& inode)
 {
-    FUSEDebugF("Trying to acquire lock on inode %s", toString(inode.id()).c_str());
+    FUSEVerboseF("Trying to acquire lock on inode %s", toString(inode.id()).c_str());
 }
 
 } // common

@@ -22,7 +22,9 @@
 
 #include <cryptopp/hex.h>
 
+#include <array>
 #include <math.h>
+#include <numeric>
 
 using namespace mega;
 
@@ -807,4 +809,305 @@ TEST(Crypto, SymmCipher_KeyRotationBreaksOldCipher)
     cipher.setkey(k1.data());
     ASSERT_TRUE(cipher.cbc_decrypt(data1, sizeof(data1), iv.data()));
     EXPECT_TRUE(equalBuf(data1, kPlain, SymmCipher::BLOCKSIZE, "Round-trip failed"));
+}
+
+// Regression test: verifies ctr_crypt produces identical ciphertext and MAC
+// across implementation changes.  Reference vectors were captured from the
+// original per-block ecb_encrypt implementation.
+TEST(Crypto, CtrCrypt_RegressionVectors)
+{
+    using Block = std::array<byte, SymmCipher::BLOCKSIZE>;
+
+    constexpr Block key = {0x0f,
+                           0x0e,
+                           0x0d,
+                           0x0c,
+                           0x0b,
+                           0x0a,
+                           0x09,
+                           0x08,
+                           0x07,
+                           0x06,
+                           0x05,
+                           0x04,
+                           0x03,
+                           0x02,
+                           0x01,
+                           0x00};
+
+    SymmCipher cipher;
+    cipher.setkey(key.data());
+
+    constexpr uint64_t ctriv = 0x0102030405060708ULL;
+
+    // --- Case 1: single aligned block, encrypt with MAC ---
+    {
+        constexpr Block plaintext = {0x00,
+                                     0x11,
+                                     0x22,
+                                     0x33,
+                                     0x44,
+                                     0x55,
+                                     0x66,
+                                     0x77,
+                                     0x88,
+                                     0x99,
+                                     0xAA,
+                                     0xBB,
+                                     0xCC,
+                                     0xDD,
+                                     0xEE,
+                                     0xFF};
+        constexpr Block expectedCt = {0x74,
+                                      0x71,
+                                      0x52,
+                                      0x94,
+                                      0xCD,
+                                      0x03,
+                                      0x9C,
+                                      0xC2,
+                                      0xDB,
+                                      0x11,
+                                      0x5C,
+                                      0x36,
+                                      0x05,
+                                      0x82,
+                                      0xC4,
+                                      0xCC};
+        constexpr Block expectedMac = {0xF4,
+                                       0xBB,
+                                       0x47,
+                                       0x7D,
+                                       0xBF,
+                                       0x92,
+                                       0xCF,
+                                       0xF2,
+                                       0xDE,
+                                       0xA9,
+                                       0x59,
+                                       0xDA,
+                                       0x9F,
+                                       0xD4,
+                                       0xF4,
+                                       0xC2};
+
+        auto data = plaintext;
+        Block mac = {};
+
+        cipher.ctr_crypt(data.data(), data.size(), 0, ctriv, mac.data(), true);
+
+        EXPECT_EQ(data, expectedCt) << "Case 1: ciphertext mismatch";
+        EXPECT_EQ(mac, expectedMac) << "Case 1: MAC mismatch";
+
+        Block decMac = {};
+        cipher.ctr_crypt(data.data(), data.size(), 0, ctriv, decMac.data(), false);
+
+        EXPECT_EQ(data, plaintext) << "Case 1: round-trip failed";
+        EXPECT_EQ(decMac, expectedMac) << "Case 1: decrypt MAC mismatch";
+    }
+
+    // --- Case 2: three aligned blocks, encrypt with MAC ---
+    {
+        constexpr unsigned kLen = SymmCipher::BLOCKSIZE * 3;
+        using ThreeBlocks = std::array<byte, kLen>;
+
+        ThreeBlocks plaintext;
+        std::iota(plaintext.begin(), plaintext.end(), byte{0});
+
+        constexpr ThreeBlocks expectedCt = {
+            0x74, 0x61, 0x72, 0xA4, 0x8D, 0x53, 0xFC, 0xB2, 0x5B, 0x81, 0xFC, 0x86,
+            0xC5, 0x52, 0x24, 0x3C, 0x68, 0x55, 0x04, 0xC0, 0x65, 0x51, 0x92, 0x47,
+            0x34, 0x0D, 0x5F, 0xBF, 0xE7, 0x16, 0x6D, 0xA6, 0x41, 0xC8, 0xEF, 0xC8,
+            0x24, 0xA8, 0x9F, 0x7D, 0x79, 0x84, 0x03, 0xB5, 0xA6, 0xED, 0x9B, 0xD4};
+        constexpr Block expectedMac = {0xA9,
+                                       0x16,
+                                       0x6E,
+                                       0x2F,
+                                       0x31,
+                                       0x09,
+                                       0xF0,
+                                       0xCB,
+                                       0xEA,
+                                       0x56,
+                                       0xD3,
+                                       0x38,
+                                       0xBE,
+                                       0xDB,
+                                       0xF8,
+                                       0x95};
+
+        auto data = plaintext;
+        Block mac = {};
+
+        cipher.ctr_crypt(data.data(), kLen, 0, ctriv, mac.data(), true);
+
+        EXPECT_EQ(data, expectedCt) << "Case 2: ciphertext mismatch";
+        EXPECT_EQ(mac, expectedMac) << "Case 2: MAC mismatch";
+
+        Block decMac = {};
+        cipher.ctr_crypt(data.data(), kLen, 0, ctriv, decMac.data(), false);
+
+        EXPECT_EQ(data, plaintext) << "Case 2: round-trip failed";
+        EXPECT_EQ(decMac, expectedMac) << "Case 2: decrypt MAC mismatch";
+    }
+
+    // --- Case 3: non-zero position, encrypt with MAC ---
+    {
+        constexpr Block plaintext = {0xDE,
+                                     0xAD,
+                                     0xBE,
+                                     0xEF,
+                                     0xCA,
+                                     0xFE,
+                                     0xBA,
+                                     0xBE,
+                                     0x01,
+                                     0x23,
+                                     0x45,
+                                     0x67,
+                                     0x89,
+                                     0xAB,
+                                     0xCD,
+                                     0xEF};
+        constexpr Block expectedCt = {0x15,
+                                      0xF9,
+                                      0xB7,
+                                      0xDB,
+                                      0xBF,
+                                      0x87,
+                                      0xD8,
+                                      0x63,
+                                      0x0A,
+                                      0x28,
+                                      0xB2,
+                                      0x93,
+                                      0x50,
+                                      0xFE,
+                                      0xF2,
+                                      0x68};
+        constexpr Block expectedMac = {0xB9,
+                                       0xC5,
+                                       0xE4,
+                                       0x82,
+                                       0x13,
+                                       0x8D,
+                                       0xAA,
+                                       0xC6,
+                                       0x09,
+                                       0xD5,
+                                       0x3C,
+                                       0x53,
+                                       0x95,
+                                       0x84,
+                                       0x3F,
+                                       0x71};
+
+        auto data = plaintext;
+        Block mac = {};
+        constexpr m_off_t pos = SymmCipher::BLOCKSIZE * 4;
+
+        cipher.ctr_crypt(data.data(), data.size(), pos, ctriv, mac.data(), true);
+
+        EXPECT_EQ(data, expectedCt) << "Case 3: ciphertext mismatch";
+        EXPECT_EQ(mac, expectedMac) << "Case 3: MAC mismatch";
+
+        Block decMac = {};
+        cipher.ctr_crypt(data.data(), data.size(), pos, ctriv, decMac.data(), false);
+
+        EXPECT_EQ(data, plaintext) << "Case 3: round-trip failed";
+        EXPECT_EQ(decMac, expectedMac) << "Case 3: decrypt MAC mismatch";
+    }
+
+    // --- Case 4: encrypt without MAC ---
+    {
+        constexpr Block plaintext = {0xAA,
+                                     0xBB,
+                                     0xCC,
+                                     0xDD,
+                                     0xEE,
+                                     0xFF,
+                                     0x00,
+                                     0x11,
+                                     0x22,
+                                     0x33,
+                                     0x44,
+                                     0x55,
+                                     0x66,
+                                     0x77,
+                                     0x88,
+                                     0x99};
+        constexpr Block expectedCt = {0xDE,
+                                      0xDB,
+                                      0xBC,
+                                      0x7A,
+                                      0x67,
+                                      0xA9,
+                                      0xFA,
+                                      0xA4,
+                                      0x71,
+                                      0xBB,
+                                      0xB2,
+                                      0xD8,
+                                      0xAF,
+                                      0x28,
+                                      0xA2,
+                                      0xAA};
+
+        auto data = plaintext;
+
+        cipher.ctr_crypt(data.data(), data.size(), 0, ctriv, nullptr, true);
+
+        EXPECT_EQ(data, expectedCt) << "Case 4: ciphertext mismatch";
+
+        cipher.ctr_crypt(data.data(), data.size(), 0, ctriv, nullptr, false);
+
+        EXPECT_EQ(data, plaintext) << "Case 4: round-trip failed";
+    }
+
+    // --- Case 5: unaligned len (20 bytes), NUL-padded buffer ---
+    {
+        constexpr unsigned kActualLen = 20;
+        using TwoBlocks = std::array<byte, SymmCipher::BLOCKSIZE * 2>;
+
+        TwoBlocks plaintext = {};
+        std::iota(plaintext.begin(), std::next(plaintext.begin(), kActualLen), byte{0xF0});
+
+        constexpr TwoBlocks expectedCt = {0x84, 0x91, 0x82, 0x54, 0x7D, 0xA3, 0x0C, 0x42,
+                                          0xAB, 0x71, 0x0C, 0x76, 0x35, 0xA2, 0xD4, 0xCC,
+                                          0x78, 0x45, 0x14, 0xD0, 0x71, 0x44, 0x84, 0x50,
+                                          0x2C, 0x14, 0x45, 0xA4, 0xFB, 0x0B, 0x73, 0xB9};
+        constexpr Block expectedMac = {0x52,
+                                       0xDF,
+                                       0x31,
+                                       0x97,
+                                       0x96,
+                                       0x73,
+                                       0x74,
+                                       0x95,
+                                       0xC0,
+                                       0x2D,
+                                       0x27,
+                                       0xF5,
+                                       0xFB,
+                                       0x80,
+                                       0xE1,
+                                       0xBD};
+
+        auto data = plaintext;
+        Block mac = {};
+
+        cipher.ctr_crypt(data.data(), kActualLen, 0, ctriv, mac.data(), true);
+
+        EXPECT_EQ(data, expectedCt) << "Case 5: ciphertext mismatch";
+        EXPECT_EQ(mac, expectedMac) << "Case 5: MAC mismatch";
+
+        Block decMac = {};
+        data = expectedCt;
+        cipher.ctr_crypt(data.data(), kActualLen, 0, ctriv, decMac.data(), false);
+
+        EXPECT_TRUE(
+            std::equal(plaintext.begin(), std::next(plaintext.begin(), kActualLen), data.begin()))
+            << "Case 5: round-trip failed";
+        EXPECT_EQ(decMac, expectedMac) << "Case 5: decrypt MAC mismatch";
+    }
 }

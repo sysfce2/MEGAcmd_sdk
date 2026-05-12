@@ -1,0 +1,11 @@
+--- a/Source/MediaInfo/Audio/File_Aac.cpp
++++ b/Source/MediaInfo/Audio/File_Aac.cpp
+@@ -104,6 +104,8 @@
+ 
+     //Temp
+     CanFill=true;
++    // SDK-6145: zero-init so Streams_Finish loop does not iterate over uninitialized memory if ics_info parsing did not run.
++    num_window_groups = 0;
+ }
+ 
+ //---------------------------------------------------------------------------

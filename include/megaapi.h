@@ -13608,7 +13608,7 @@ class MegaApi
          *   Disable all JSON logging if no other flags are set
          *
          * - MegaApi::JSON_LOG_CHUNK_RECEIVED = 1
-         *   Enable logging of received JSON chunked data
+         *   Enable logging of received JSON chunked data (enabled by default)
          *   @see MegaApi::setMaxPayloadLogSize for size limits
          *
          * - MegaApi::JSON_LOG_CHUNK_PROCESSING = 2
@@ -17634,13 +17634,22 @@ class MegaApi
          * The associated request type with this request is MegaRequest::TYPE_SET_MAX_CONNECTIONS
          * Valid data in the MegaRequest object received on callbacks:
          * - MegaRequest::getParamType - Returns the value for \c direction parameter
-         * - MegaRequest::getNumber - Returns the number of \c connections
+         * - MegaRequest::getNumber - Returns the requested value for \c connections
+         *
+         * Possible error codes on request finish are:
+         * - MegaError::API_EARGS if \c direction is invalid or \c connections is smaller than 1
+         * - MegaError::API_ETOOMANY if \c connections is greater than 100
+         * - MegaError::API_EWRITE if the live value was updated but the new
+         *   persisted value could not be stored
+         *
+         * The value is persisted per SDK base path and restored on subsequent
+         * SDK instances.
          *
          * @param direction Direction of transfers
          * Valid values for this parameter are:
          * - MegaTransfer::TYPE_DOWNLOAD = 0
          * - MegaTransfer::TYPE_UPLOAD = 1
-         * @param connections Maximum number of connection (it should between 1 and 100)
+         * @param connections Maximum number of connections (it should be between 1 and 100)
          */
         void setMaxConnections(int direction, int connections, MegaRequestListener* listener = NULL);
 
@@ -17652,9 +17661,18 @@ class MegaApi
          *
          * The associated request type with this request is MegaRequest::TYPE_SET_MAX_CONNECTIONS
          * Valid data in the MegaRequest object received on callbacks:
-         * - MegaRequest::getNumber - Returns the number of connections
+         * - MegaRequest::getNumber - Returns the requested number of connections
          *
-         * @param connections Maximum number of connection (it should between 1 and 100)
+         * Possible error codes on request finish are:
+         * - MegaError::API_EARGS if \c connections is smaller than 1
+         * - MegaError::API_ETOOMANY if \c connections is greater than 100
+         * - MegaError::API_EWRITE if the live values were updated but the new
+         *   persisted values could not be stored
+         *
+         * The value is persisted per SDK base path and restored on subsequent
+         * SDK instances.
+         *
+         * @param connections Maximum number of connections (it should be between 1 and 100)
          */
         void setMaxConnections(int connections, MegaRequestListener* listener = NULL);
 
@@ -20935,6 +20953,35 @@ class MegaApi
         void setPublicKeyPinning(bool enable);
 
         /**
+         * @brief Enable / disable the platform-native available-disk-space query.
+         *
+         * When enabled on iOS, availableDiskSpace() uses Foundation's
+         * NSURLVolumeAvailableCapacityForImportantUsageKey, which accounts for
+         * purgeable storage the system can reclaim for user-requested
+         * downloads. When disabled, or on platforms without a native
+         * implementation, the SDK uses the default statfs-based path.
+         *
+         * This setting is currently only effective on iOS. On other platforms
+         * (macOS, Linux, Windows, Android) the setter is accepted but has no
+         * runtime effect.
+         *
+         * Disabled by default. The setting is process-wide: it affects every
+         * MegaApi instance in the same process.
+         *
+         * @param enable true to use the platform-native query on supported
+         * platforms, false to always use the default path.
+         */
+        void setUsePlatformAvailableDiskSpaceQuery(bool enable);
+
+        /**
+         * @brief Returns whether the platform-native available-disk-space
+         * query is enabled.
+         *
+         * @see MegaApi::setUsePlatformAvailableDiskSpaceQuery
+         */
+        bool usePlatformAvailableDiskSpaceQuery() const;
+
+        /**
          * @brief Pause the reception of action packets
          *
          * This function is intended to help apps to initialize themselves
@@ -20998,6 +21045,10 @@ class MegaApi
          * This function escapes (%xx) forbidden characters in the local filesystem if needed.
          * You can revert this operation using MegaApi::unescapeFsIncompatible
          *
+         * Note: On Windows and Android, this function also escapes trailing dots ('.')
+         * (for example: "file." -> "file%2e") to match platform APIs that cannot create
+         * names ending in '.'. This allows sync/transfers to round-trip the original cloud name.
+         *
          * If no dstPath is provided or filesystem type it's not supported this method will
          * escape characters contained in the following list: \/:?\"<>|*
          * Otherwise it will check forbidden characters for local filesystem type
@@ -21019,6 +21070,9 @@ class MegaApi
          * unescape those sequences that once has been unescaped results in any character
          * of the following list: \/:?\"<>|*
          * Otherwise it will unescape those characters forbidden in local filesystem type
+         *
+         * This function also reverts trailing-dot escaping performed by
+         * MegaApi::escapeFsIncompatible on Windows/Android (for example: "file%2e" -> "file.").
          *
          * The input string must be UTF8 encoded. The returned value will be UTF8 too.
          * You take ownership of the returned value. Use delete[] to release the memory.

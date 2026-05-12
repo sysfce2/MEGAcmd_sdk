@@ -699,6 +699,21 @@ Dispatcher& dispatcher(FSP_FILE_SYSTEM& filesystem)
 #enumerant, enumerant \
     }
 
+static std::string flagsToString(const std::map<const char*, UINT32>& names, UINT32 mask)
+{
+    std::string flags;
+    for (auto& n: names)
+    {
+        if ((mask & n.second))
+        {
+            if (!flags.empty())
+                flags += '|';
+            flags += n.first;
+        }
+    }
+    return flags;
+}
+
 void logAccess(const char* function, UINT32 mask)
 {
     static const std::map<const char*, UINT32> names = {ENTRY(DELETE),
@@ -717,11 +732,7 @@ void logAccess(const char* function, UINT32 mask)
                                                         ENTRY(WRITE_DAC),
                                                         ENTRY(WRITE_OWNER)}; // names
 
-    for (auto& n: names)
-    {
-        if ((mask & n.second))
-            FUSEDebugF("%s: access: %s", function, n.first);
-    }
+    FUSEDebugF("%s: access: %s", function, flagsToString(names, mask).c_str());
 }
 
 void logAttributes(const char* function, UINT32 mask)
@@ -749,11 +760,7 @@ void logAttributes(const char* function, UINT32 mask)
                                                         ENTRY(FILE_ATTRIBUTE_UNPINNED),
                                                         ENTRY(FILE_ATTRIBUTE_VIRTUAL)}; // names
 
-    for (auto& n: names)
-    {
-        if ((mask & n.second))
-            FUSEDebugF("%s: attribute: %s", function, n.first);
-    }
+    FUSEDebugF("%s: attributes: %s", function, flagsToString(names, mask).c_str());
 }
 
 void logOptions(const char* function, UINT32 mask)
@@ -776,11 +783,7 @@ void logOptions(const char* function, UINT32 mask)
                                                         ENTRY(FILE_SYNCHRONOUS_IO_NONALERT),
                                                         ENTRY(FILE_WRITE_THROUGH)}; // names
 
-    for (auto& n: names)
-    {
-        if ((mask & n.second))
-            FUSEDebugF("%s: option: %s", function, n.first);
-    }
+    FUSEDebugF("%s: options: %s", function, flagsToString(names, mask).c_str());
 }
 
 #undef ENTRY
